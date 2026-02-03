@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="WaypointBeacon/WaypointBeacon.csproj" />
+  <Project Path="ZZCakeBuild/CakeBuild.csproj" />
+</Solution>

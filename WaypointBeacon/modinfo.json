@@ -1,0 +1,11 @@
+{
+    "$schema": "https://moddbcdn.vintagestory.at/schema/modinfo.latest.json",
+    "type": "Code",
+    "modid": "waypointbeacon",
+    "name": "The Waypoint Beacon Mod",
+    "authors": [ "JimmyMac3" ],
+    "description": "Your map knows. Your eyes can too - 3D beacons for waypoints",
+    "version": "1.0.0",
+    "dependencies": { "game": "1.21.0" },
+    "side": "Universal"
+}
