@@ -673,3 +673,24 @@ fabric.properties
 # Additional files built by Visual Studio
 
 # End of https://www.toptal.com/developers/gitignore/api/csharp,visualstudio,visualstudiocode,rider
+
+### Vintage Story / Mod dev extras ###
+# If you ever copy your VS install into the repo (easy mistake)
+[Vv]intagestory*/
+Game*/
+Client*/
+Server*/
+
+# If you keep local test worlds/settings inside the repo folder
+Worlds*/
+Saves*/
+ModData*/
+ModConfig*/
+
+# Put packaged builds here and ignore them
+dist/
+out/
+packages/
+
+# (Optional) ignore common generated artifacts if you export zips locally
+*.zip
