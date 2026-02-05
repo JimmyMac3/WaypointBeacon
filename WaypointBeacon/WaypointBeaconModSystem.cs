@@ -2035,6 +2035,10 @@ var beacons = mod.GetVisibleBeacons();
                             pitchRad *= (Math.PI / 180.0);
                         }
                         double pitchUpRad = -pitchRad;
+                        if (pitchUpRad > Math.PI) pitchUpRad -= Math.PI * 2.0;
+                        if (pitchUpRad < -Math.PI) pitchUpRad += Math.PI * 2.0;
+                        if (pitchUpRad > Math.PI / 2.0) pitchUpRad -= Math.PI;
+                        if (pitchUpRad < -Math.PI / 2.0) pitchUpRad += Math.PI;
                         double beaconBaseY = Math.Floor(b.Y);
                         double baseDy = beaconBaseY - camPos.Y;
                         double pitchToBaseRad = Math.Atan2(baseDy, dist);
