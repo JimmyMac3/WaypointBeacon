@@ -98,7 +98,7 @@ namespace WaypointBeacon
         return (float)GameMath.Clamp(t, 0, 1);
     }
         // XZ-only (blocks)
-        private const int MaxMaxRenderDistanceXZ = 1000;            // safety cap (blocks)
+        private const int MaxMaxRenderDistanceXZ = 20000;            // safety cap (blocks)
         private const float BeamRingRadius = 0.10f;
         private const int BeamRingLines = 10;
 
@@ -370,11 +370,11 @@ public int MinRenderDistance
     {
         int min = clientConfig?.MinRenderDistance ?? 250;
         if (min < 1) min = 1;
-        if (min > 1000) min = 1000;
+        if (min > MaxMaxRenderDistanceXZ) min = MaxMaxRenderDistanceXZ;
 
         int max = clientConfig?.MaxRenderDistance ?? 1000;
         if (max < min) max = min;
-        if (max > 1000) max = 1000;
+        if (max > MaxMaxRenderDistanceXZ) max = MaxMaxRenderDistanceXZ;
 
         if (min > max) min = max;
         return min;
@@ -388,11 +388,11 @@ public int MaxRenderDistance
     {
         int max = clientConfig?.MaxRenderDistance ?? 1000;
         if (max < 1) max = 1;
-        if (max > 1000) max = 1000;
+        if (max > MaxMaxRenderDistanceXZ) max = MaxMaxRenderDistanceXZ;
 
         int min = clientConfig?.MinRenderDistance ?? 250;
         if (min < 1) min = 1;
-        if (min > 1000) min = 1000;
+        if (min > MaxMaxRenderDistanceXZ) min = MaxMaxRenderDistanceXZ;
 
         if (max < min) max = min;
         return max;
@@ -1188,6 +1188,27 @@ public int MaxRenderDistance
             return y;
         }
 
+        // Heightmap-based underground test (treats deep open pits as underground if below rain map height).
+        // We intentionally prefer rain map height over skylight so a vertical "hole" still counts as underground.
+        internal bool IsUndergroundAt(Vec3d camPos)
+        {
+            try
+            {
+                int x = (int)Math.Floor(camPos.X);
+                int y = (int)Math.Floor(camPos.Y);
+                int z = (int)Math.Floor(camPos.Z);
+
+                // If you're significantly below the rainmap height, you're underground.
+                int rainH = capi?.World?.BlockAccessor?.GetRainMapHeightAt(x, z) ?? y;
+                return y < (rainH - 2);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+
         // ---- Label generation (single line + CGJ sentinel) ----
         private string BuildLabel(BeaconInfo b)
         {
@@ -1808,6 +1829,7 @@ public int MaxRenderDistance
                 int worldTopY = mod.GetWorldHeightBlocks() - 1;
 
                 Vec3d camPos = capi.World.Player.Entity.CameraPos;
+                bool underground = mod.IsUndergroundAt(camPos);
                 BlockPos origin = new BlockPos((int)camPos.X, (int)camPos.Y, (int)camPos.Z);
 
                 foreach (var b in beacons)
@@ -1985,6 +2007,7 @@ var beacons = mod.GetVisibleBeacons();
 
 
                 Vec3d camPos = capi.World.Player.Entity.CameraPos;
+                bool underground = mod.IsUndergroundAt(camPos);
                 double cx = fw / 2.0;
                 double cy = fh / 2.0;
                 int labelMode = mod.ShowLabelsMode;
@@ -2017,27 +2040,25 @@ var beacons = mod.GetVisibleBeacons();
                         double beamZ = Math.Floor(b.Z) + 0.5;
 
                         
-                        // Allow auto-hide to work for beacons at any height; the proximity check
-                        // against the beam in screen space is sufficient to gate visibility.
+                        double maxAbovePlayer = 8.0;
+                        if (underground && b.Y > camPos.Y + maxAbovePlayer) continue;
+
+                        // double yMin = camPos.Y - 1;
+                        // double yMax = camPos.Y + 1;
+
+                        double below = 1;
+                        double above = 360;
 
                         double dist = GameMath.Sqrt((Math.Floor(b.X) + 0.5 - camPos.X) * (Math.Floor(b.X) + 0.5 - camPos.X)
                                                   + (Math.Floor(b.Z) + 0.5 - camPos.Z) * (Math.Floor(b.Z) + 0.5 - camPos.Z));
 
-                        // Pitch gate: require aiming at the beacon base or higher using triangle math.
-                        // VS pitch convention is typically +down, so invert to get +up.
-                        const double aimMarginDeg = 0.5;
-                        double pitchUpDeg = (-capi.World.Player.Entity.Pos.Pitch) * (180.0 / Math.PI);
-                        double beaconBaseY = Math.Floor(b.Y);
-                        double baseDy = beaconBaseY - camPos.Y;
-                        double requiredPitchDeg = dist <= 0.0001
-                            ? (baseDy >= 0 ? 90.0 : -90.0)
-                            : (Math.Atan2(baseDy, dist) * (180.0 / Math.PI));
-
-                        if (pitchUpDeg + aimMarginDeg < requiredPitchDeg) continue;
-
+                        below += GameMath.Clamp(dist * 0.5, 0, 200);  // adds up to +200 blocks of extra down-range
+                        double yMin = camPos.Y - below;
+                        double yMax = camPos.Y + above;
+                        
+                        if (yMin < 0) yMin = 0;
                         int mapSizeY = capi.World.BlockAccessor.MapSizeY;
-                        double yMin = 0;
-                        double yMax = mapSizeY - 1;
+                        if (yMax > mapSizeY - 1) yMax = mapSizeY - 1;
 
                         Vec3d beamA = new Vec3d(beamX, yMin, beamZ);
                         Vec3d beamB = new Vec3d(beamX, yMax, beamZ);
@@ -2070,6 +2091,54 @@ var beacons = mod.GetVisibleBeacons();
                         }
 
                         if (d2 > r2) continue;
+
+                        // Extra aiming gate: require that the crosshair is aimed at (or slightly above) the beacon's base height,
+                        // not merely aligned in XZ. This prevents labels appearing when you're looking at the mountainside far below
+                        // a high beacon at long distance.
+                        try
+                        {
+                            // Camera forward vector from yaw/pitch.
+                            float yaw = capi.World.Player.Entity.Pos.Yaw;
+                            float pitch = capi.World.Player.Entity.Pos.Pitch;
+
+                            double cosPitch = Math.Cos(pitch);
+                            Vec3d fwd = new Vec3d(-Math.Sin(yaw) * cosPitch, Math.Sin(pitch), Math.Cos(yaw) * cosPitch);
+
+                            double len = Math.Sqrt(fwd.X * fwd.X + fwd.Y * fwd.Y + fwd.Z * fwd.Z);
+                            if (len > 1e-6)
+                            {
+                                fwd.X /= len; fwd.Y /= len; fwd.Z /= len;
+
+                                // Gate labels by aim angle relative to the beacon base height.
+                                // This prevents labels from appearing when you're aiming well below (or above) the beacon at long distances.
+                                double dxAim = beamX - camPos.X;
+                                double dzAim = beamZ - camPos.Z;
+                                double horiz = Math.Sqrt(dxAim * dxAim + dzAim * dzAim);
+
+                                if (horiz > 0.001)
+                                {
+                                    double dyAim = b.Y - camPos.Y;
+
+                                    // pitch relative to horizontal, +up / -down
+                                    double curPitch = Math.Asin(GameMath.Clamp((float)fwd.Y, -1f, 1f));
+                                    double neededPitch = Math.Atan2(dyAim, horiz);
+
+                                    // Small tolerance so players don't need pixel-perfect aim
+                                    const double aimMarginDeg = 2.0;
+                                    double margin = aimMarginDeg * GameMath.DEG2RAD;
+
+                                    if (dyAim >= 0)
+                                    {
+                                        if (curPitch < neededPitch - margin) continue;
+                                    }
+                                    else
+                                    {
+                                        if (curPitch > neededPitch + margin) continue;
+                                    }
+                                }
+                            }
+                        }
+                        catch { /* ignore */ }
 
                         // Anchor point for AutoHide: closest point on the beam (in screen space).
                         if (aOk && bOk)
