@@ -2029,7 +2029,12 @@ var beacons = mod.GetVisibleBeacons();
                         // VS pitch convention is typically +down, so invert to get +up.
                         const double aimMarginDeg = 0.5;
                         double aimMarginRad = aimMarginDeg * (Math.PI / 180.0);
-                        double pitchUpRad = -capi.World.Player.Entity.Pos.Pitch;
+                        double pitchRad = capi.World.Player.Entity.Pos.Pitch;
+                        if (Math.Abs(pitchRad) > Math.PI * 1.1)
+                        {
+                            pitchRad *= (Math.PI / 180.0);
+                        }
+                        double pitchUpRad = pitchRad;
                         double beaconBaseY = Math.Floor(b.Y);
                         double baseDy = beaconBaseY - camPos.Y;
                         double pitchToBaseRad = Math.Atan2(baseDy, dist);
