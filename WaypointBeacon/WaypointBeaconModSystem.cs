@@ -571,6 +571,8 @@ public int MaxRenderDistance
             {
                 clientConfig = new WaypointBeaconClientConfig();
             }
+
+            TryRegisterConfigLib();
             clientChannel = capi.Network
                 .RegisterChannel("waypointbeacon")
                 .RegisterMessageType<WbSetPinnedPacket>()
@@ -607,6 +609,84 @@ public int MaxRenderDistance
             tickListenerId = capi.Event.RegisterGameTickListener(_ => RefreshBeacons(), 250);
 
             capi.ShowChatMessage("[WaypointBeacon] Loaded (CGJ sentinel, matched OL/FG labels)");
+        }
+
+        private void TryRegisterConfigLib()
+        {
+            if (capi?.ModLoader?.IsModEnabled("configlib") != true) return;
+
+            try
+            {
+                Type configLibType = AppDomain.CurrentDomain
+                    .GetAssemblies()
+                    .SelectMany(a =>
+                    {
+                        try { return a.GetTypes(); }
+                        catch { return Array.Empty<Type>(); }
+                    })
+                    .FirstOrDefault(t => t.Name == "ConfigLibModSystem" || t.FullName == "ConfigLib.ConfigLibModSystem");
+
+                if (configLibType == null) return;
+
+                var getModSystem = capi.ModLoader.GetType()
+                    .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                    .FirstOrDefault(m => m.Name == "GetModSystem" && m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(Type));
+
+                object configLibSystem = getModSystem?.Invoke(capi.ModLoader, new object[] { configLibType });
+                if (configLibSystem == null) return;
+
+                object configObj = clientConfig ?? new WaypointBeaconClientConfig();
+                var candidates = configLibType.GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                    .Where(m => m.Name.IndexOf("Register", StringComparison.OrdinalIgnoreCase) >= 0)
+                    .ToArray();
+
+                bool invoked = false;
+
+                foreach (var method in candidates)
+                {
+                    var pars = method.GetParameters();
+                    if (pars.Length == 3
+                        && pars[0].ParameterType == typeof(string)
+                        && pars[1].ParameterType.IsAssignableFrom(configObj.GetType())
+                        && pars[2].ParameterType == typeof(string))
+                    {
+                        method.Invoke(configLibSystem, new object[] { Mod.Info.ModID, configObj, ClientConfigFileName });
+                        invoked = true;
+                        break;
+                    }
+                    if (pars.Length == 2
+                        && pars[0].ParameterType.IsAssignableFrom(configObj.GetType())
+                        && pars[1].ParameterType == typeof(string))
+                    {
+                        method.Invoke(configLibSystem, new object[] { configObj, ClientConfigFileName });
+                        invoked = true;
+                        break;
+                    }
+                    if (pars.Length == 2
+                        && pars[0].ParameterType == typeof(string)
+                        && pars[1].ParameterType.IsAssignableFrom(configObj.GetType()))
+                    {
+                        method.Invoke(configLibSystem, new object[] { Mod.Info.ModID, configObj });
+                        invoked = true;
+                        break;
+                    }
+                    if (pars.Length == 1 && pars[0].ParameterType.IsAssignableFrom(configObj.GetType()))
+                    {
+                        method.Invoke(configLibSystem, new object[] { configObj });
+                        invoked = true;
+                        break;
+                    }
+                }
+
+                if (invoked && clientConfig == null)
+                {
+                    clientConfig = (WaypointBeaconClientConfig)configObj;
+                }
+            }
+            catch
+            {
+                // Ignore ConfigLib integration failures; config still works via JSON.
+            }
         }
 
         public override void StartServerSide(ICoreServerAPI api)
