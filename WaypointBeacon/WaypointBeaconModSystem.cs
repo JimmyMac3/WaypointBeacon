@@ -2017,31 +2017,14 @@ var beacons = mod.GetVisibleBeacons();
                         double beamZ = Math.Floor(b.Z) + 0.5;
 
                         
-                        double maxAbovePlayer = 8.0;
-                        if (b.Y > camPos.Y + maxAbovePlayer) continue;
-
-                        // double yMin = camPos.Y - 1;
-                        // double yMax = camPos.Y + 1;
+                        // Allow auto-hide to work for beacons at any height; the proximity check
+                        // against the beam in screen space is sufficient to gate visibility.
 
                         double below = 1;
                         double above = 360;
 
                         double dist = GameMath.Sqrt((Math.Floor(b.X) + 0.5 - camPos.X) * (Math.Floor(b.X) + 0.5 - camPos.X)
                                                   + (Math.Floor(b.Z) + 0.5 - camPos.Z) * (Math.Floor(b.Z) + 0.5 - camPos.Z));
-
-                        // Pitch gate (triangle math): require aiming high enough toward the beacon base so labels don't appear while looking far below it.
-                        // VS pitch convention is typically +down, so invert to get +up.
-                        const double aimMarginDeg = 0.5;  // tweak if needed (0.0 = strict)
-                        double wbPitchUpDeg = (-capi.World.Player.Entity.Pos.Pitch) * (180.0 / Math.PI);
-
-                        double wbBaseY = Math.Floor(b.Y);   // beacon base
-                        double wbDy = wbBaseY - camPos.Y;
-                        // dist is horizontal distance to the beacon beam center
-                        double wbReqPitchDeg = (dist <= 0.0001)
-                            ? (wbDy >= 0 ? 90.0 : -90.0)
-                            : (Math.Atan2(wbDy, dist) * (180.0 / Math.PI));
-
-                        if (wbPitchUpDeg + aimMarginDeg < wbReqPitchDeg) continue;
 
                         below += GameMath.Clamp(dist * 0.5, 0, 200);  // adds up to +200 blocks of extra down-range
                         double yMin = camPos.Y - below;
