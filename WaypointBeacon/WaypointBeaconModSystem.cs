@@ -2166,9 +2166,8 @@ var beacons = mod.GetVisibleBeacons();
                         if (aOk && bOk)
                         {
                             double abx = bx - ax;
-                            double aby = by - ay;
-                            double apx = cx - ax;
-                            double apy = cy - ay;
+                    if (iconTex != null)
+            private static double Clamp(double v, double lo, double hi)
                             double abLen2 = abx * abx + aby * aby;
                             double t = abLen2 <= 0.000001 ? 0.0 : (apx * abx + apy * aby) / abLen2;
                             if (t < 0) t = 0;
@@ -2670,13 +2669,33 @@ private static double Clamp(double v, double lo, double hi)
             try
             {
                 var t = obj.GetType();
-                const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            if (composer == null) return false;
 
-                var p = t.GetProperty(name, flags);
-                if (p != null) return p.GetValue(obj);
+                if (pOn != null && pOn.CanRead)
+                {
+                    return (bool)pOn.GetValue(sw);
+                }
 
-                var f = t.GetField(name, flags);
-                if (f != null) return f.GetValue(obj);
+                if (fOn != null)
+                {
+                    return (bool)fOn.GetValue(sw);
+                }
+            catch
+            {
+                // ignore
+            }
+
+
+            if (composer == null) return;
+
+                if (fOn != null)
+                {
+                    fOn.SetValue(sw, on);
+                }
+            }
+            catch
+            {
+                // ignore
             }
             catch
             {
