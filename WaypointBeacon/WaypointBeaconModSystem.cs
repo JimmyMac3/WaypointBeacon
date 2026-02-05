@@ -2043,7 +2043,8 @@ var beacons = mod.GetVisibleBeacons();
                         double baseDy = beaconBaseY - camPos.Y;
                         double pitchToBaseRad = Math.Atan2(baseDy, dist);
 
-                        if (pitchUpRad + aimMarginRad < pitchToBaseRad)
+                        double effectivePitchUpRad = pitchUpRad * 2.0;
+                        if (effectivePitchUpRad + aimMarginRad < pitchToBaseRad)
                         {
                             if (!loggedAutoHide)
                             {
