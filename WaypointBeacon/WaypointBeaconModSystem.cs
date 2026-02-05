@@ -2035,8 +2035,10 @@ var beacons = mod.GetVisibleBeacons();
                         if (pitchUpRad + aimMarginRad < pitchToBaseRad) continue;
 
                         int mapSizeY = capi.World.BlockAccessor.MapSizeY;
-                        double yMin = 0;
-                        double yMax = mapSizeY - 1;
+                        double yMin = camPos.Y - 64;
+                        double yMax = camPos.Y + 64;
+                        if (yMin < 0) yMin = 0;
+                        if (yMax > mapSizeY - 1) yMax = mapSizeY - 1;
 
                         Vec3d beamA = new Vec3d(beamX, yMin, beamZ);
                         Vec3d beamB = new Vec3d(beamX, yMax, beamZ);
