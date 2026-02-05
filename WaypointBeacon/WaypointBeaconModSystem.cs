@@ -1810,6 +1810,8 @@ public int MaxRenderDistance
                 Vec3d camPos = capi.World.Player.Entity.CameraPos;
                 BlockPos origin = new BlockPos((int)camPos.X, (int)camPos.Y, (int)camPos.Z);
 
+                bool loggedAutoHide = false;
+
                 foreach (var b in beacons)
                 {
 
@@ -2032,7 +2034,16 @@ var beacons = mod.GetVisibleBeacons();
                         double baseDy = beaconBaseY - camPos.Y;
                         double pitchToBaseRad = Math.Atan2(baseDy, dist);
 
-                        if (pitchUpRad + aimMarginRad < pitchToBaseRad) continue;
+                        if (pitchUpRad + aimMarginRad < pitchToBaseRad)
+                        {
+                            if (!loggedAutoHide)
+                            {
+                                loggedAutoHide = true;
+                                capi?.Logger?.Debug("[WaypointBeacon] AutoHide skip (pitch). pitchUpRad={0:0.000} pitchToBaseRad={1:0.000} dist={2:0.0} baseDy={3:0.0}",
+                                    pitchUpRad, pitchToBaseRad, dist, baseDy);
+                            }
+                            continue;
+                        }
 
                         int mapSizeY = capi.World.BlockAccessor.MapSizeY;
                         double yMin = camPos.Y - 64;
@@ -2048,7 +2059,15 @@ var beacons = mod.GetVisibleBeacons();
 
                         bool aOk = scrA.Z > 0;
                         bool bOk = scrB.Z > 0;
-                        if (!aOk && !bOk) continue;
+                        if (!aOk && !bOk)
+                        {
+                            if (!loggedAutoHide)
+                            {
+                                loggedAutoHide = true;
+                                capi?.Logger?.Debug("[WaypointBeacon] AutoHide skip (beam offscreen). scrA.Z={0:0.000} scrB.Z={1:0.000}", scrA.Z, scrB.Z);
+                            }
+                            continue;
+                        }
 
                         double ax = scrA.X;
                         double ay = fh - scrA.Y;
@@ -2070,7 +2089,15 @@ var beacons = mod.GetVisibleBeacons();
                             d2 = dx * dx + dy * dy;
                         }
 
-                        if (d2 > r2) continue;
+                        if (d2 > r2)
+                        {
+                            if (!loggedAutoHide)
+                            {
+                                loggedAutoHide = true;
+                                capi?.Logger?.Debug("[WaypointBeacon] AutoHide skip (crosshair distance). d2={0:0.0} r2={1:0.0}", d2, r2);
+                            }
+                            continue;
+                        }
 
                         // Anchor point for AutoHide: closest point on the beam (in screen space).
                         if (aOk && bOk)
