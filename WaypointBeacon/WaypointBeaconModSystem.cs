@@ -1879,23 +1879,16 @@ public int MaxRenderDistance
             public double RenderOrder => 0.5;
             public int RenderRange => (mod?.MaxRenderDistanceXZ ?? DefaultMaxRenderDistanceXZ) + 64;
 
-            public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
+
             {
-                if (!(mod?.BeamsEnabled ?? true)) return;
+
 
                 var beacons = mod.GetVisibleBeacons();
-                if (beacons == null || beacons.Count == 0) return;
 
-                int worldTopY = mod.GetWorldHeightBlocks() - 1;
-
-                Vec3d camPos = capi.World.Player.Entity.CameraPos;
-                BlockPos origin = new BlockPos((int)camPos.X, (int)camPos.Y, (int)camPos.Z);
 
                 foreach (var b in beacons)
                 {
 
-                    double x = Math.Floor(b.X) + 0.5;
-                    double z = Math.Floor(b.Z) + 0.5;
 
                     double y0 = Math.Floor(b.Y);
                     if (y0 < 1) y0 = 1;
