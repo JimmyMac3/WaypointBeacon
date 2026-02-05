@@ -1810,8 +1810,6 @@ public int MaxRenderDistance
                 Vec3d camPos = capi.World.Player.Entity.CameraPos;
                 BlockPos origin = new BlockPos((int)camPos.X, (int)camPos.Y, (int)camPos.Z);
 
-                bool loggedAutoHide = false;
-
                 foreach (var b in beacons)
                 {
 
@@ -1995,6 +1993,8 @@ var beacons = mod.GetVisibleBeacons();
                 bool autoHideActive = false;
                 double autoHideBeamX = 0;
                 double autoHideBeamY = 0;
+
+                bool loggedAutoHide = false;
 
                 foreach (var b in beacons)
                 {
