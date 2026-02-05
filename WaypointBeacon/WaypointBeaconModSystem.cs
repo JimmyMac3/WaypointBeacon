@@ -2026,23 +2026,13 @@ var beacons = mod.GetVisibleBeacons();
                         // Pitch gate: require aiming at the beacon base or higher using triangle math.
                         // VS pitch convention is typically +down, so invert to get +up.
                         const double aimMarginDeg = 0.5;
-                        double pitchDeg = capi.World.Player.Entity.Pos.Pitch * (180.0 / Math.PI);
-                        double pitchUpDeg = -pitchDeg;
+                        double aimMarginRad = aimMarginDeg * (Math.PI / 180.0);
+                        double pitchUpRad = -capi.World.Player.Entity.Pos.Pitch;
                         double beaconBaseY = Math.Floor(b.Y);
                         double baseDy = beaconBaseY - camPos.Y;
-                        double requiredPitchDeg;
-                        if (baseDy <= 0)
-                        {
-                            requiredPitchDeg = 0.0;
-                        }
-                        else
-                        {
-                            requiredPitchDeg = dist <= 0.0001
-                                ? 90.0
-                                : (Math.Atan2(baseDy, dist) * (180.0 / Math.PI));
-                        }
+                        double pitchToBaseRad = Math.Atan2(baseDy, dist);
 
-                        if (pitchUpDeg + aimMarginDeg < requiredPitchDeg) continue;
+                        if (pitchUpRad + aimMarginRad < pitchToBaseRad) continue;
 
                         int mapSizeY = capi.World.BlockAccessor.MapSizeY;
                         double yMin = 0;
