@@ -2020,9 +2020,6 @@ var beacons = mod.GetVisibleBeacons();
                         // Allow auto-hide to work for beacons at any height; the proximity check
                         // against the beam in screen space is sufficient to gate visibility.
 
-                        double below = 1;
-                        double above = 360;
-
                         double dist = GameMath.Sqrt((Math.Floor(b.X) + 0.5 - camPos.X) * (Math.Floor(b.X) + 0.5 - camPos.X)
                                                   + (Math.Floor(b.Z) + 0.5 - camPos.Z) * (Math.Floor(b.Z) + 0.5 - camPos.Z));
 
@@ -2038,13 +2035,9 @@ var beacons = mod.GetVisibleBeacons();
 
                         if (pitchUpDeg + aimMarginDeg < requiredPitchDeg) continue;
 
-                        below += GameMath.Clamp(dist * 0.5, 0, 200);  // adds up to +200 blocks of extra down-range
-                        double yMin = camPos.Y - below;
-                        double yMax = camPos.Y + above;
-                        
-                        if (yMin < 0) yMin = 0;
                         int mapSizeY = capi.World.BlockAccessor.MapSizeY;
-                        if (yMax > mapSizeY - 1) yMax = mapSizeY - 1;
+                        double yMin = 0;
+                        double yMax = mapSizeY - 1;
 
                         Vec3d beamA = new Vec3d(beamX, yMin, beamZ);
                         Vec3d beamB = new Vec3d(beamX, yMax, beamZ);
