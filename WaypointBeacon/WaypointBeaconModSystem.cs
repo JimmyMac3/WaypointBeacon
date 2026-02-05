@@ -2029,13 +2029,17 @@ var beacons = mod.GetVisibleBeacons();
                         double pitchUpDeg = (-capi.World.Player.Entity.Pos.Pitch) * (180.0 / Math.PI);
                         double beaconBaseY = Math.Floor(b.Y);
                         double baseDy = beaconBaseY - camPos.Y;
+                        double requiredPitchDeg;
                         if (baseDy <= 0)
                         {
-                            baseDy = 1;
+                            requiredPitchDeg = 0.0;
                         }
-                        double requiredPitchDeg = dist <= 0.0001
-                            ? (baseDy >= 0 ? 90.0 : -90.0)
-                            : (Math.Atan2(baseDy, dist) * (180.0 / Math.PI));
+                        else
+                        {
+                            requiredPitchDeg = dist <= 0.0001
+                                ? 90.0
+                                : (Math.Atan2(baseDy, dist) * (180.0 / Math.PI));
+                        }
 
                         if (pitchUpDeg + aimMarginDeg < requiredPitchDeg) continue;
 
