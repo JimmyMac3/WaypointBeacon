@@ -2017,39 +2017,31 @@ var beacons = mod.GetVisibleBeacons();
                         double beamZ = Math.Floor(b.Z) + 0.5;
 
                         
-                        double maxAbovePlayer = 8.0;
-                        if (b.Y > camPos.Y + maxAbovePlayer) continue;
-
-                        // double yMin = camPos.Y - 1;
-                        // double yMax = camPos.Y + 1;
-
-                        double below = 1;
-                        double above = 360;
+                        // Allow auto-hide to work for beacons at any height; the proximity check
+                        // against the beam in screen space is sufficient to gate visibility.
 
                         double dist = GameMath.Sqrt((Math.Floor(b.X) + 0.5 - camPos.X) * (Math.Floor(b.X) + 0.5 - camPos.X)
                                                   + (Math.Floor(b.Z) + 0.5 - camPos.Z) * (Math.Floor(b.Z) + 0.5 - camPos.Z));
 
-                        // Pitch gate (triangle math): require aiming high enough toward the beacon base so labels don't appear while looking far below it.
+                        // Pitch gate: require aiming at the beacon base or higher using triangle math.
                         // VS pitch convention is typically +down, so invert to get +up.
-                        const double aimMarginDeg = 0.5;  // tweak if needed (0.0 = strict)
-                        double wbPitchUpDeg = (-capi.World.Player.Entity.Pos.Pitch) * (180.0 / Math.PI);
+                        const double aimMarginDeg = 0.5;
+                        double pitchUpDeg = (-capi.World.Player.Entity.Pos.Pitch) * (180.0 / Math.PI);
+                        double beaconBaseY = Math.Floor(b.Y);
+                        double baseDy = beaconBaseY - camPos.Y;
+                        if (baseDy <= 0)
+                        {
+                            baseDy = 1;
+                        }
+                        double requiredPitchDeg = dist <= 0.0001
+                            ? (baseDy >= 0 ? 90.0 : -90.0)
+                            : (Math.Atan2(baseDy, dist) * (180.0 / Math.PI));
 
-                        double wbBaseY = Math.Floor(b.Y);   // beacon base
-                        double wbDy = wbBaseY - camPos.Y;
-                        // dist is horizontal distance to the beacon beam center
-                        double wbReqPitchDeg = (dist <= 0.0001)
-                            ? (wbDy >= 0 ? 90.0 : -90.0)
-                            : (Math.Atan2(wbDy, dist) * (180.0 / Math.PI));
+                        if (pitchUpDeg + aimMarginDeg < requiredPitchDeg) continue;
 
-                        if (wbPitchUpDeg + aimMarginDeg < wbReqPitchDeg) continue;
-
-                        below += GameMath.Clamp(dist * 0.5, 0, 200);  // adds up to +200 blocks of extra down-range
-                        double yMin = camPos.Y - below;
-                        double yMax = camPos.Y + above;
-                        
-                        if (yMin < 0) yMin = 0;
                         int mapSizeY = capi.World.BlockAccessor.MapSizeY;
-                        if (yMax > mapSizeY - 1) yMax = mapSizeY - 1;
+                        double yMin = 0;
+                        double yMax = mapSizeY - 1;
 
                         Vec3d beamA = new Vec3d(beamX, yMin, beamZ);
                         Vec3d beamB = new Vec3d(beamX, yMax, beamZ);
