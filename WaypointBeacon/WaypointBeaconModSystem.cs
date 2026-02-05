@@ -2042,9 +2042,7 @@ var beacons = mod.GetVisibleBeacons();
                                 : (Math.Atan2(baseDy, dist) * (180.0 / Math.PI));
                         }
 
-                        bool pitchOk = pitchUpDeg + aimMarginDeg >= requiredPitchDeg
-                                       || pitchDeg + aimMarginDeg >= requiredPitchDeg;
-                        if (!pitchOk) continue;
+                        if (pitchUpDeg + aimMarginDeg < requiredPitchDeg) continue;
 
                         int mapSizeY = capi.World.BlockAccessor.MapSizeY;
                         double yMin = 0;
