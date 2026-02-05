@@ -2041,7 +2041,7 @@ var beacons = mod.GetVisibleBeacons();
                         double baseDy = beaconBaseY - camPos.Y;
                         double pitchToBaseRad = Math.Atan2(baseDy, dist);
 
-                        double effectivePitchUpRad = pitchUpRad * 2.0;
+                        double effectivePitchUpRad = pitchUpRad * 3.0;
                         if (effectivePitchUpRad + aimMarginRad < pitchToBaseRad) continue;
 
                         int mapSizeY = capi.World.BlockAccessor.MapSizeY;
