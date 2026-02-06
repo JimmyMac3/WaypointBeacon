@@ -98,7 +98,7 @@ namespace WaypointBeacon
         return (float)GameMath.Clamp(t, 0, 1);
     }
         // XZ-only (blocks)
-        private const int MaxMaxRenderDistanceXZ = 1000;            // safety cap (blocks)
+        private const int MaxMaxRenderDistanceXZ = 20000;            // safety cap (blocks)
         private const float BeamRingRadius = 0.10f;
         private const int BeamRingLines = 10;
 
@@ -370,11 +370,11 @@ public int MinRenderDistance
     {
         int min = clientConfig?.MinRenderDistance ?? 250;
         if (min < 1) min = 1;
-        if (min > 1000) min = 1000;
+        if (min > MaxMaxRenderDistanceXZ) min = MaxMaxRenderDistanceXZ;
 
         int max = clientConfig?.MaxRenderDistance ?? 1000;
         if (max < min) max = min;
-        if (max > 1000) max = 1000;
+        if (max > MaxMaxRenderDistanceXZ) max = MaxMaxRenderDistanceXZ;
 
         if (min > max) min = max;
         return min;
@@ -388,11 +388,11 @@ public int MaxRenderDistance
     {
         int max = clientConfig?.MaxRenderDistance ?? 1000;
         if (max < 1) max = 1;
-        if (max > 1000) max = 1000;
+        if (max > MaxMaxRenderDistanceXZ) max = MaxMaxRenderDistanceXZ;
 
         int min = clientConfig?.MinRenderDistance ?? 250;
         if (min < 1) min = 1;
-        if (min > 1000) min = 1000;
+        if (min > MaxMaxRenderDistanceXZ) min = MaxMaxRenderDistanceXZ;
 
         if (max < min) max = min;
         return max;
@@ -405,7 +405,7 @@ public int MaxRenderDistance
             if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
 
             if (blocks < 500) blocks = 500;
-            if (blocks > 10000) blocks = 10000;
+            if (blocks > MaxMaxRenderDistanceXZ) blocks = MaxMaxRenderDistanceXZ;
 
             clientConfig.MaxRenderDistance = blocks;
 
