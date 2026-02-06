@@ -571,9 +571,6 @@ public int MaxRenderDistance
             {
                 clientConfig = new WaypointBeaconClientConfig();
             }
-
-
-            TryRegisterConfigLib();
             clientChannel = capi.Network
                 .RegisterChannel("waypointbeacon")
                 .RegisterMessageType<WbSetPinnedPacket>()
@@ -610,84 +607,6 @@ public int MaxRenderDistance
             tickListenerId = capi.Event.RegisterGameTickListener(_ => RefreshBeacons(), 250);
 
             capi.ShowChatMessage("[WaypointBeacon] Loaded (CGJ sentinel, matched OL/FG labels)");
-        }
-
-        private void TryRegisterConfigLib()
-        {
-            if (capi?.ModLoader?.IsModEnabled("configlib") != true) return;
-
-            try
-            {
-                Type configLibType = AppDomain.CurrentDomain
-                    .GetAssemblies()
-                    .SelectMany(a =>
-                    {
-                        try { return a.GetTypes(); }
-                        catch { return Array.Empty<Type>(); }
-                    })
-                    .FirstOrDefault(t => t.Name == "ConfigLibModSystem" || t.FullName == "ConfigLib.ConfigLibModSystem");
-
-                if (configLibType == null) return;
-
-                var getModSystem = capi.ModLoader.GetType()
-                    .GetMethods(BindingFlags.Instance | BindingFlags.Public)
-                    .FirstOrDefault(m => m.Name == "GetModSystem" && m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(Type));
-
-                object configLibSystem = getModSystem?.Invoke(capi.ModLoader, new object[] { configLibType });
-                if (configLibSystem == null) return;
-
-                object configObj = clientConfig ?? new WaypointBeaconClientConfig();
-                var candidates = configLibType.GetMethods(BindingFlags.Instance | BindingFlags.Public)
-                    .Where(m => m.Name.IndexOf("Register", StringComparison.OrdinalIgnoreCase) >= 0)
-                    .ToArray();
-
-                bool invoked = false;
-
-                foreach (var method in candidates)
-                {
-                    var pars = method.GetParameters();
-                    if (pars.Length == 3
-                        && pars[0].ParameterType == typeof(string)
-                        && pars[1].ParameterType.IsAssignableFrom(configObj.GetType())
-                        && pars[2].ParameterType == typeof(string))
-                    {
-                        method.Invoke(configLibSystem, new object[] { Mod.Info.ModID, configObj, ClientConfigFileName });
-                        invoked = true;
-                        break;
-                    }
-                    if (pars.Length == 2
-                        && pars[0].ParameterType.IsAssignableFrom(configObj.GetType())
-                        && pars[1].ParameterType == typeof(string))
-                    {
-                        method.Invoke(configLibSystem, new object[] { configObj, ClientConfigFileName });
-                        invoked = true;
-                        break;
-                    }
-                    if (pars.Length == 2
-                        && pars[0].ParameterType == typeof(string)
-                        && pars[1].ParameterType.IsAssignableFrom(configObj.GetType()))
-                    {
-                        method.Invoke(configLibSystem, new object[] { Mod.Info.ModID, configObj });
-                        invoked = true;
-                        break;
-                    }
-                    if (pars.Length == 1 && pars[0].ParameterType.IsAssignableFrom(configObj.GetType()))
-                    {
-                        method.Invoke(configLibSystem, new object[] { configObj });
-                        invoked = true;
-                        break;
-                    }
-                }
-
-                if (invoked && clientConfig == null)
-                {
-                    clientConfig = (WaypointBeaconClientConfig)configObj;
-                }
-            }
-            catch
-            {
-                // Ignore ConfigLib integration failures; config still works via JSON.
-            }
         }
 
         public override void StartServerSide(ICoreServerAPI api)
@@ -1879,16 +1798,23 @@ public int MaxRenderDistance
             public double RenderOrder => 0.5;
             public int RenderRange => (mod?.MaxRenderDistanceXZ ?? DefaultMaxRenderDistanceXZ) + 64;
 
-
+            public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
             {
-
+                if (!(mod?.BeamsEnabled ?? true)) return;
 
                 var beacons = mod.GetVisibleBeacons();
+                if (beacons == null || beacons.Count == 0) return;
 
+                int worldTopY = mod.GetWorldHeightBlocks() - 1;
+
+                Vec3d camPos = capi.World.Player.Entity.CameraPos;
+                BlockPos origin = new BlockPos((int)camPos.X, (int)camPos.Y, (int)camPos.Z);
 
                 foreach (var b in beacons)
                 {
 
+                    double x = Math.Floor(b.X) + 0.5;
+                    double z = Math.Floor(b.Z) + 0.5;
 
                     double y0 = Math.Floor(b.Y);
                     if (y0 < 1) y0 = 1;
@@ -1987,30 +1913,31 @@ public int MaxRenderDistance
                 double abLen2 = abx * abx + aby * aby;
                 if (abLen2 <= 0.000001)
                 {
-                        // Allow auto-hide to work for beacons at any height; the proximity check
-                        // against the beam in screen space is sufficient to gate visibility.
-                        // Pitch gate: require aiming at the beacon base or higher using triangle math.
-                        const double aimMarginDeg = 0.5;
-                        double aimMarginRad = aimMarginDeg * (Math.PI / 180.0);
-                        double pitchRad = capi.World.Player.Entity.Pos.Pitch;
-                        if (Math.Abs(pitchRad) > Math.PI * 1.1)
-                        {
-                            pitchRad *= (Math.PI / 180.0);
-                        }
-                        double pitchUpRad = -pitchRad;
-                        if (pitchUpRad > Math.PI) pitchUpRad -= Math.PI * 2.0;
-                        if (pitchUpRad < -Math.PI) pitchUpRad += Math.PI * 2.0;
-                        if (pitchUpRad > Math.PI / 2.0) pitchUpRad -= Math.PI;
-                        if (pitchUpRad < -Math.PI / 2.0) pitchUpRad += Math.PI;
-                        double beaconBaseY = Math.Floor(b.Y);
-                        double baseDy = beaconBaseY - camPos.Y;
-                        double pitchToBaseRad = Math.Atan2(baseDy, dist);
+                    // A and B are (almost) the same point
+                    return apx * apx + apy * apy;
+                }
 
-                        double effectivePitchUpRad = pitchUpRad * 3.0;
-                        if (effectivePitchUpRad + aimMarginRad < pitchToBaseRad) continue;
-                        double yMin = camPos.Y - 64;
-                        double yMax = camPos.Y + 64;
-                        if (yMin < 0) yMin = 0;
+                double t = (apx * abx + apy * aby) / abLen2;
+                if (t < 0) t = 0;
+                else if (t > 1) t = 1;
+
+                double cx = ax + t * abx;
+                double cy = ay + t * aby;
+
+                double dx = px - cx;
+                double dy = py - cy;
+                return dx * dx + dy * dy;
+            }
+
+
+            public double RenderOrder => 1.25;
+            public int RenderRange => 0;
+
+            public BeaconLabelRenderer(ICoreClientAPI capi, WaypointBeaconModSystem mod)
+            {
+                this.capi = capi;
+                this.mod = mod;
+            }
 
             public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
             {
@@ -2159,8 +2086,9 @@ var beacons = mod.GetVisibleBeacons();
                         if (aOk && bOk)
                         {
                             double abx = bx - ax;
-                    if (iconTex != null)
-            private static double Clamp(double v, double lo, double hi)
+                            double aby = by - ay;
+                            double apx = cx - ax;
+                            double apy = cy - ay;
                             double abLen2 = abx * abx + aby * aby;
                             double t = abLen2 <= 0.000001 ? 0.0 : (apx * abx + apy * aby) / abLen2;
                             if (t < 0) t = 0;
@@ -2662,33 +2590,13 @@ private static double Clamp(double v, double lo, double hi)
             try
             {
                 var t = obj.GetType();
-            if (composer == null) return false;
+                const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
-                if (pOn != null && pOn.CanRead)
-                {
-                    return (bool)pOn.GetValue(sw);
-                }
+                var p = t.GetProperty(name, flags);
+                if (p != null) return p.GetValue(obj);
 
-                if (fOn != null)
-                {
-                    return (bool)fOn.GetValue(sw);
-                }
-            catch
-            {
-                // ignore
-            }
-
-
-            if (composer == null) return;
-
-                if (fOn != null)
-                {
-                    fOn.SetValue(sw, on);
-                }
-            }
-            catch
-            {
-                // ignore
+                var f = t.GetField(name, flags);
+                if (f != null) return f.GetValue(obj);
             }
             catch
             {
@@ -2793,7 +2701,7 @@ private static double Clamp(double v, double lo, double hi)
 
                 var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
                 var pOn = sw.GetType().GetProperty("On", flags);
-}
+                if (pOn != null && pOn.CanRead) return (bool)pOn.GetValue(sw);
 
                 var fOn = sw.GetType().GetField("On", flags) ?? sw.GetType().GetField("on", flags);
                 if (fOn != null) return (bool)fOn.GetValue(sw);
