@@ -1194,6 +1194,7 @@ public int MaxRenderDistance
                         X = x,
                         Y = y,
                         Z = z,
+                        BaseY = CalculateBeaconBaseY(x, y, z),
                         Name = name,
                         Icon = icon,
                         ColorInt = colorInt,
@@ -1292,6 +1293,44 @@ public int MaxRenderDistance
         private long GetWorldSeed()
         {
             return capi?.World?.Seed ?? 0L;
+        }
+
+        private double CalculateBeaconBaseY(double x, double y, double z)
+        {
+            var blockAccessor = capi?.World?.BlockAccessor;
+            if (blockAccessor == null) return Math.Floor(y);
+
+            int maxY = blockAccessor.MapSizeY - 1;
+            int xi = (int)Math.Floor(x);
+            int zi = (int)Math.Floor(z);
+            int startY = GameMath.Clamp((int)Math.Floor(y), 1, Math.Max(1, maxY - 1));
+
+            int surfaceY = FindSurfaceBlockY(blockAccessor, xi, zi, startY, maxY);
+            if (surfaceY < 0) return Math.Floor(y);
+
+            // If waypoint is below ground, keep the beacon base at the waypoint's Y.
+            if (y <= surfaceY + 0.5) return Math.Floor(y);
+
+            // Otherwise anchor the base at the first solid block with air above it.
+            return surfaceY + 1;
+        }
+
+        private int FindSurfaceBlockY(IBlockAccessor blockAccessor, int x, int z, int startY, int maxY)
+        {
+            for (int yy = startY; yy >= 1; yy--)
+            {
+                Block block = blockAccessor.GetBlock(x, yy, z);
+                Block above = blockAccessor.GetBlock(x, Math.Min(yy + 1, maxY), z);
+
+                if (!IsAirBlock(block) && IsAirBlock(above)) return yy;
+            }
+
+            return -1;
+        }
+
+        private static bool IsAirBlock(Block block)
+        {
+            return block == null || block.Id == 0;
         }
 
         private void SeedBeaconOverride(object wp, double x, double y, double z, string name, bool on)
@@ -1912,6 +1951,7 @@ public int MaxRenderDistance
         {
             public int Id;
             public double X, Y, Z;
+            public double BaseY;
             public string Name;
             public string Icon;
             public int ColorInt;
@@ -1954,7 +1994,7 @@ public int MaxRenderDistance
                     double x = Math.Floor(b.X) + 0.5;
                     double z = Math.Floor(b.Z) + 0.5;
 
-                    double y0 = Math.Floor(b.Y);
+                    double y0 = Math.Floor(b.BaseY);
                     if (y0 < 1) y0 = 1;
                     if (y0 > worldTopY - 2) y0 = worldTopY - 2;
 
@@ -1962,7 +2002,7 @@ public int MaxRenderDistance
                     Vec3d end = new Vec3d(x, worldTopY, z);
 
 
-                    float fadeAlpha = mod?.ComputeNearFadeAlpha(camPos, x, Math.Floor(b.Y) + 0.5, z) ?? 1f;
+                    float fadeAlpha = mod?.ComputeNearFadeAlpha(camPos, x, Math.Floor(b.BaseY) + 0.5, z) ?? 1f;
                     if (fadeAlpha <= 0.01f) continue;
                     int rgbaInt = ColorIntToRenderLineRgbaInt(b.ColorInt);
                     if (rgbaInt == unchecked((int)0xFF000000)) rgbaInt = unchecked((int)0xFFFFFFFF);
@@ -2175,7 +2215,7 @@ var beacons = mod.GetVisibleBeacons();
                         if (pitchUpRad < -Math.PI) pitchUpRad += Math.PI * 2.0;
                         if (pitchUpRad > Math.PI / 2.0) pitchUpRad -= Math.PI;
                         if (pitchUpRad < -Math.PI / 2.0) pitchUpRad += Math.PI;
-                        double beaconBaseY = Math.Floor(b.Y);
+                        double beaconBaseY = Math.Floor(b.BaseY);
                         double baseDy = beaconBaseY - camPos.Y;
                         double pitchToBaseRad = Math.Atan2(baseDy, dist);
 
@@ -2250,7 +2290,7 @@ var beacons = mod.GetVisibleBeacons();
                         // Always: project the waypoint's label anchor as before.
                         Vec3d worldPos = new Vec3d(
                             Math.Floor(b.X) + 0.5,
-                            Math.Floor(b.Y) + LabelWorldYOffsetBlocks,
+                            Math.Floor(b.BaseY) + LabelWorldYOffsetBlocks,
                             Math.Floor(b.Z) + 0.5
                         );
 
@@ -2271,7 +2311,7 @@ var beacons = mod.GetVisibleBeacons();
                     }
 
                     // From here down we render the label. In AutoHide mode, we already ensured proximity and anchor.
-                    float fadeAlphaLbl = mod?.ComputeNearFadeAlpha(camPos, Math.Floor(b.X) + 0.5, Math.Floor(b.Y) + 0.5, Math.Floor(b.Z) + 0.5) ?? 1f;
+                    float fadeAlphaLbl = mod?.ComputeNearFadeAlpha(camPos, Math.Floor(b.X) + 0.5, Math.Floor(b.BaseY) + 0.5, Math.Floor(b.Z) + 0.5) ?? 1f;
                     if (fadeAlphaLbl <= 0.01f) continue;
 
                     Vec4f whiteA = new Vec4f(1f, 1f, 1f, fadeAlphaLbl);
