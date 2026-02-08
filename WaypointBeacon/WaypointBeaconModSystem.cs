@@ -131,6 +131,12 @@ namespace WaypointBeacon
 
 
         private const string PinsAttrKeyPrefix = "waypointbeacon:pins:";
+        private const int WorldInitStableTicksRequired = 8;
+
+        private bool worldSeedChecked;
+        private bool worldInitializationActive;
+        private int worldInitializationStableTicks;
+        private int worldInitializationLastCount = -1;
 
         // ---- Client config (local only) ----
         private const string ClientConfigFileName = "waypointbeacon-client.json";
@@ -176,6 +182,9 @@ namespace WaypointBeacon
 
             // Beacon max render distance in blocks (XZ only)
             public int MaxRenderDistanceXZ = 1000;
+
+            // Worlds where we've already initialized waypoint beacon overrides (per world seed)
+            public List<long> InitializedWorldSeeds = new List<long>();
         }
 
         private WaypointBeaconClientConfig clientConfig = new WaypointBeaconClientConfig();
@@ -607,6 +616,11 @@ public int MaxRenderDistance
             tickListenerId = capi.Event.RegisterGameTickListener(_ => RefreshBeacons(), 250);
 
             capi.ShowChatMessage("[WaypointBeacon] Loaded (CGJ sentinel, matched OL/FG labels)");
+
+            worldSeedChecked = false;
+            worldInitializationActive = false;
+            worldInitializationStableTicks = 0;
+            worldInitializationLastCount = -1;
         }
 
         public override void StartServerSide(ICoreServerAPI api)
@@ -737,8 +751,12 @@ public int MaxRenderDistance
                 {
                     bool seedOn = false;
 
+                    if (worldInitializationActive)
+                    {
+                        SeedBeaconOverride(wp, x, y, z, name, false);
+                    }
                     // Only apply the default to waypoints that are newly created after initial snapshot.
-                    if (seenWaypointKeysInitialized && isNewThisSession && DefaultNewWaypointBeaconOn)
+                    else if (seenWaypointKeysInitialized && isNewThisSession && DefaultNewWaypointBeaconOn)
                     {
                         seedOn = true;
 
@@ -1088,8 +1106,12 @@ public int MaxRenderDistance
                 visibleBeacons.Clear();
 
                 if (!GlobalBeaconsEnabled) return;
+                if (!IsWaypointLayerReady()) return;
+
+                EnsureWorldInitializationState();
 
                 bool captureInitialSeen = !seenWaypointKeysInitialized;
+                int waypointCount = 0;
 
 
 
@@ -1103,6 +1125,8 @@ public int MaxRenderDistance
 
                 foreach (var wp in EnumerateWaypoints())
                 {
+                    waypointCount++;
+
                     if (!TryGetWaypointPos(wp, out double x, out double y, out double z)) continue;
 
                     // XZ distance only
@@ -1120,6 +1144,10 @@ public int MaxRenderDistance
                     // We seed an override once per waypoint (first time we see it) so that later vanilla pin changes
                     // do NOT affect beacon state.
                     string bKey = MakePinKey(x, y, z, name);
+                    if (worldInitializationActive && !beaconOverrides.ContainsKey(bKey))
+                    {
+                        SeedBeaconOverride(wp, x, y, z, name, false);
+                    }
                     // If another mod created a new waypoint (without the Add dialog), apply the default beacon setting
                     // once when we first notice it. Manual waypoint creation is handled by our Add dialog onSave patch,
                     // which writes an explicit override and will therefore not be overwritten here.
@@ -1130,7 +1158,11 @@ public int MaxRenderDistance
                     else if (!seenWaypointKeys.Contains(bKey))
                     {
                         seenWaypointKeys.Add(bKey);
-                        if (DefaultNewWaypointBeaconOn && !beaconOverrides.ContainsKey(bKey))
+                        if (worldInitializationActive)
+                        {
+                            SeedBeaconOverride(wp, x, y, z, name, false);
+                        }
+                        else if (DefaultNewWaypointBeaconOn && !beaconOverrides.ContainsKey(bKey))
                         {
                             SetBeaconOnForWaypointObject(wp, true);
                             // ensure local cache reflects it immediately
@@ -1168,6 +1200,8 @@ public int MaxRenderDistance
                         ColorRgba = rgba
                     });
                 }
+
+                UpdateWorldInitializationState(waypointCount);
                 // After the first successful refresh, any newly discovered waypoint will be treated as 'new' for default-beacon purposes
                 if (!seenWaypointKeysInitialized) seenWaypointKeysInitialized = true;
 
@@ -1175,6 +1209,110 @@ public int MaxRenderDistance
             catch (Exception e)
             {
                 capi.Logger.Error("[WaypointBeacon] RefreshBeacons exception: {0}", e);
+            }
+        }
+
+        private bool IsWaypointLayerReady()
+        {
+            var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+            if (mapManager?.MapLayers == null) return false;
+
+            var layer = mapManager.MapLayers.FirstOrDefault(l =>
+                l != null && l.GetType().Name.IndexOf("WaypointMapLayer", StringComparison.OrdinalIgnoreCase) >= 0);
+            if (layer == null) return false;
+
+            object listObj =
+                TryGetMember(layer, "ownWaypoints") ??
+                TryGetMember(layer, "OwnWaypoints") ??
+                TryGetMember(layer, "waypoints") ??
+                TryGetMember(layer, "Waypoints");
+
+            return listObj is IEnumerable;
+        }
+
+        private void EnsureWorldInitializationState()
+        {
+            if (worldSeedChecked) return;
+
+            worldSeedChecked = true;
+            worldInitializationActive = !IsWorldSeedInitialized();
+            worldInitializationStableTicks = 0;
+            worldInitializationLastCount = -1;
+        }
+
+        private void UpdateWorldInitializationState(int waypointCount)
+        {
+            if (!worldInitializationActive) return;
+
+            if (worldInitializationLastCount == waypointCount)
+            {
+                worldInitializationStableTicks++;
+            }
+            else
+            {
+                worldInitializationStableTicks = 0;
+            }
+
+            worldInitializationLastCount = waypointCount;
+
+            if (worldInitializationStableTicks >= WorldInitStableTicksRequired)
+            {
+                worldInitializationActive = false;
+                MarkWorldSeedInitialized();
+            }
+        }
+
+        private bool IsWorldSeedInitialized()
+        {
+            long seed = GetWorldSeed();
+            if (seed == 0) return true;
+
+            if (clientConfig?.InitializedWorldSeeds == null) return false;
+            return clientConfig.InitializedWorldSeeds.Contains(seed);
+        }
+
+        private void MarkWorldSeedInitialized()
+        {
+            long seed = GetWorldSeed();
+            if (seed == 0) return;
+
+            if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
+            if (clientConfig.InitializedWorldSeeds == null)
+            {
+                clientConfig.InitializedWorldSeeds = new List<long>();
+            }
+
+            if (!clientConfig.InitializedWorldSeeds.Contains(seed))
+            {
+                clientConfig.InitializedWorldSeeds.Add(seed);
+                try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
+            }
+        }
+
+        private long GetWorldSeed()
+        {
+            return capi?.World?.Seed ?? 0L;
+        }
+
+        private void SeedBeaconOverride(object wp, double x, double y, double z, string name, bool on)
+        {
+            if (wp == null) return;
+
+            string key = MakePinKey(x, y, z, name ?? "");
+            beaconOverrides[key] = on;
+
+            if (clientChannel?.Connected == true)
+            {
+                int id = GetStableWaypointId(wp, x, y, z, name ?? "");
+                clientChannel.SendPacket(new WbSetPinnedPacket
+                {
+                    WaypointId = id,
+                    Pinned = on,
+                    X = x,
+                    Y = y,
+                    Z = z,
+                    Title = name ?? ""
+                });
             }
         }
 
