@@ -1307,7 +1307,17 @@ public int MaxRenderDistance
             int maxY = blockAccessor.MapSizeY - 1;
             int xi = (int)Math.Floor(x);
             int zi = (int)Math.Floor(z);
-            int surfaceY = FindSurfaceBlockY(blockAccessor, xi, zi, maxY);
+            int terrainY = GetTerrainHeightAt(blockAccessor, xi, zi, maxY);
+
+            if (!IsWaypointAboveGround(blockAccessor, xi, zi, y, terrainY, maxY))
+            {
+                return Math.Floor(y);
+            }
+
+            int startY = Math.Min((int)Math.Floor(y), maxY - BaseYRequiredAirBlocks);
+            if (startY < terrainY) return Math.Floor(y);
+
+            int surfaceY = FindSurfaceBlockY(blockAccessor, xi, zi, startY, terrainY, maxY);
             if (surfaceY < 0) return Math.Floor(y);
 
             // If waypoint is below ground, keep the beacon base at the waypoint's Y.
@@ -1317,12 +1327,12 @@ public int MaxRenderDistance
             return surfaceY + 1;
         }
 
-        private int FindSurfaceBlockY(IBlockAccessor blockAccessor, int x, int z, int maxY)
+        private int FindSurfaceBlockY(IBlockAccessor blockAccessor, int x, int z, int startY, int minY, int maxY)
         {
             var pos = new BlockPos(x, 1, z);
-            int maxSurfaceY = Math.Max(1, maxY - BaseYRequiredAirBlocks);
+            int maxSurfaceY = Math.Max(minY, Math.Min(startY, maxY - BaseYRequiredAirBlocks));
 
-            for (int yy = 1; yy <= maxSurfaceY; yy++)
+            for (int yy = maxSurfaceY; yy >= minY; yy--)
             {
                 pos.Y = yy;
                 Block block = blockAccessor.GetBlock(pos);
@@ -1344,6 +1354,30 @@ public int MaxRenderDistance
             }
 
             return -1;
+        }
+
+        private int GetTerrainHeightAt(IBlockAccessor blockAccessor, int x, int z, int maxY)
+        {
+            try
+            {
+                int terrainY = blockAccessor.GetTerrainMapheightAt(x, z);
+                if (terrainY < 1) terrainY = 1;
+                if (terrainY > maxY) terrainY = maxY;
+                return terrainY;
+            }
+            catch
+            {
+                return Math.Max(1, maxY);
+            }
+        }
+
+        private bool IsWaypointAboveGround(IBlockAccessor blockAccessor, int x, int z, double y, int terrainY, int maxY)
+        {
+            if (y <= terrainY + 0.5) return false;
+
+            var pos = new BlockPos(x, Math.Min((int)Math.Floor(y), maxY), z);
+            Block block = blockAccessor.GetBlock(pos);
+            return IsAirBlock(block);
         }
 
         private static bool IsAirBlock(Block block)
