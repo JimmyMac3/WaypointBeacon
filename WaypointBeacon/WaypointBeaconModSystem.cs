@@ -1317,10 +1317,15 @@ public int MaxRenderDistance
 
         private int FindSurfaceBlockY(IBlockAccessor blockAccessor, int x, int z, int startY, int maxY)
         {
+            var pos = new BlockPos(x, startY, z);
+
             for (int yy = startY; yy >= 1; yy--)
             {
-                Block block = blockAccessor.GetBlock(x, yy, z);
-                Block above = blockAccessor.GetBlock(x, Math.Min(yy + 1, maxY), z);
+                pos.Y = yy;
+                Block block = blockAccessor.GetBlock(pos);
+
+                pos.Y = Math.Min(yy + 1, maxY);
+                Block above = blockAccessor.GetBlock(pos);
 
                 if (!IsAirBlock(block) && IsAirBlock(above)) return yy;
             }
