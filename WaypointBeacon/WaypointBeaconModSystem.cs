@@ -1088,6 +1088,7 @@ public int MaxRenderDistance
                 visibleBeacons.Clear();
 
                 if (!GlobalBeaconsEnabled) return;
+                if (!IsWaypointLayerReady()) return;
 
                 bool captureInitialSeen = !seenWaypointKeysInitialized;
 
@@ -1176,6 +1177,24 @@ public int MaxRenderDistance
             {
                 capi.Logger.Error("[WaypointBeacon] RefreshBeacons exception: {0}", e);
             }
+        }
+
+        private bool IsWaypointLayerReady()
+        {
+            var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+            if (mapManager?.MapLayers == null) return false;
+
+            var layer = mapManager.MapLayers.FirstOrDefault(l =>
+                l != null && l.GetType().Name.IndexOf("WaypointMapLayer", StringComparison.OrdinalIgnoreCase) >= 0);
+            if (layer == null) return false;
+
+            object listObj =
+                TryGetMember(layer, "ownWaypoints") ??
+                TryGetMember(layer, "OwnWaypoints") ??
+                TryGetMember(layer, "waypoints") ??
+                TryGetMember(layer, "Waypoints");
+
+            return listObj is IEnumerable;
         }
 
         public IReadOnlyList<BeaconInfo> GetVisibleBeacons() => visibleBeacons;
