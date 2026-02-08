@@ -1572,6 +1572,16 @@ public int MaxRenderDistance
             return name;
         }
 
+        internal string GetLabelText(BeaconInfo b)
+        {
+            return BuildLabel(b);
+        }
+
+        internal string BuildLabelCacheKey(int id, string label, bool outline)
+        {
+            return outline ? $"{id}:OL:{label}" : $"{id}:FG:{label}";
+        }
+
         public LoadedTexture GetOrCreateLabelTexture(BeaconInfo b, BeaconLabelRenderer cacheOwner, bool outline)
         {
             // IMPORTANT: same exact label for OL and FG so the textures match perfectly
@@ -2234,10 +2244,8 @@ public int MaxRenderDistance
             private readonly WaypointBeaconModSystem mod;
 
             private readonly Dictionary<string, LoadedTexture> cached = new Dictionary<string, LoadedTexture>();
+            private readonly Dictionary<int, string> lastLabelTexts = new Dictionary<int, string>();
 
-            // When label style includes distance, we need to rebuild textures as the player moves.
-            private Vec3d lastDistancePos;
-            
             private static double Dist2PointToSegment(double px, double py, double ax, double ay, double bx, double by)
             {
                 double abx = bx - ax;
@@ -2280,35 +2288,9 @@ public int MaxRenderDistance
 
                 
 
-                // Distance labels must be re-generated as the player moves, otherwise you'll end up with
-                // stale textures (and the cache will grow without bound). We keep it simple and rebuild
-                // when the player has moved ~1 block.
-                if (mod.LabelStyleMode == 1)
+                if (mod.LabelStyleMode != 1)
                 {
-                    var ent = capi.World?.Player?.Entity;
-                    if (ent != null)
-                    {
-                        if (lastDistancePos == null)
-                        {
-                            lastDistancePos = new Vec3d(ent.Pos.X, ent.Pos.Y, ent.Pos.Z);
-                        }
-                        else
-                        {
-                            double dx = ent.Pos.X - lastDistancePos.X;
-                            double dy = ent.Pos.Y - lastDistancePos.Y;
-                            double dz = ent.Pos.Z - lastDistancePos.Z;
-
-                            if ((dx * dx + dy * dy + dz * dz) > 1.0)
-                            {
-                                DisposeAllTextures();
-                                lastDistancePos.Set(ent.Pos.X, ent.Pos.Y, ent.Pos.Z);
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    lastDistancePos = null;
+                    lastLabelTexts.Clear();
                 }
 
 var beacons = mod.GetVisibleBeacons();
@@ -2329,8 +2311,23 @@ var beacons = mod.GetVisibleBeacons();
                 double autoHideBeamX = 0;
                 double autoHideBeamY = 0;
 
+                var liveLabelIds = new HashSet<int>();
+
                 foreach (var b in beacons)
                 {
+                    liveLabelIds.Add(b.Id);
+
+                    if (mod.LabelStyleMode == 1)
+                    {
+                        string labelText = mod.GetLabelText(b);
+                        if (lastLabelTexts.TryGetValue(b.Id, out string prev) && prev != labelText)
+                        {
+                            RemoveCached(mod.BuildLabelCacheKey(b.Id, prev, outline: true));
+                            RemoveCached(mod.BuildLabelCacheKey(b.Id, prev, outline: false));
+                        }
+                        lastLabelTexts[b.Id] = labelText;
+                    }
+
                     // Label visibility modes
                     if (labelMode == 1) continue; // Never
 
@@ -2561,6 +2558,22 @@ if (iconTex != null)
 
                     RenderLoadedTextureTint(fgTex, textX, textY, whiteA);
                 }
+
+                if (mod.LabelStyleMode == 1 && lastLabelTexts.Count > 0)
+                {
+                    var toRemove = new List<int>();
+                    foreach (var kv in lastLabelTexts)
+                    {
+                        if (!liveLabelIds.Contains(kv.Key))
+                        {
+                            RemoveCached(mod.BuildLabelCacheKey(kv.Key, kv.Value, outline: true));
+                            RemoveCached(mod.BuildLabelCacheKey(kv.Key, kv.Value, outline: false));
+                            toRemove.Add(kv.Key);
+                        }
+                    }
+
+                    foreach (int id in toRemove) lastLabelTexts.Remove(id);
+                }
             }
 
             
@@ -2586,6 +2599,16 @@ private static double Clamp(double v, double lo, double hi)
                     old.Dispose();
                 }
                 cached[key] = tex;
+            }
+
+            private void RemoveCached(string key)
+            {
+                if (string.IsNullOrEmpty(key)) return;
+                if (cached.TryGetValue(key, out var tex))
+                {
+                    tex?.Dispose();
+                    cached.Remove(key);
+                }
             }
 
             public void DisposeAllTextures()
