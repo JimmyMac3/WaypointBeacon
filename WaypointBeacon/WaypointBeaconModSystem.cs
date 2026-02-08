@@ -132,6 +132,7 @@ namespace WaypointBeacon
 
         private const string PinsAttrKeyPrefix = "waypointbeacon:pins:";
         private const int WorldInitStableTicksRequired = 8;
+        private const int BaseYRequiredAirBlocks = 4;
 
         private bool worldSeedChecked;
         private bool worldInitializationActive;
@@ -185,6 +186,9 @@ namespace WaypointBeacon
 
             // Worlds where we've already initialized waypoint beacon overrides (per world seed)
             public List<long> InitializedWorldSeeds = new List<long>();
+
+            // Cached beacon base Y (per world seed + waypoint key)
+            public Dictionary<string, double> BeaconBaseYOverrides = new Dictionary<string, double>();
         }
 
         private WaypointBeaconClientConfig clientConfig = new WaypointBeaconClientConfig();
@@ -1194,7 +1198,7 @@ public int MaxRenderDistance
                         X = x,
                         Y = y,
                         Z = z,
-                        BaseY = CalculateBeaconBaseY(x, y, z),
+                        BaseY = GetOrCreateBeaconBaseY(x, y, z, name),
                         Name = name,
                         Icon = icon,
                         ColorInt = colorInt,
@@ -1303,9 +1307,7 @@ public int MaxRenderDistance
             int maxY = blockAccessor.MapSizeY - 1;
             int xi = (int)Math.Floor(x);
             int zi = (int)Math.Floor(z);
-            int startY = GameMath.Clamp((int)Math.Floor(y), 1, Math.Max(1, maxY - 1));
-
-            int surfaceY = FindSurfaceBlockY(blockAccessor, xi, zi, startY, maxY);
+            int surfaceY = FindSurfaceBlockY(blockAccessor, xi, zi, maxY);
             if (surfaceY < 0) return Math.Floor(y);
 
             // If waypoint is below ground, keep the beacon base at the waypoint's Y.
@@ -1315,19 +1317,30 @@ public int MaxRenderDistance
             return surfaceY + 1;
         }
 
-        private int FindSurfaceBlockY(IBlockAccessor blockAccessor, int x, int z, int startY, int maxY)
+        private int FindSurfaceBlockY(IBlockAccessor blockAccessor, int x, int z, int maxY)
         {
-            var pos = new BlockPos(x, startY, z);
+            var pos = new BlockPos(x, 1, z);
+            int maxSurfaceY = Math.Max(1, maxY - BaseYRequiredAirBlocks);
 
-            for (int yy = startY; yy >= 1; yy--)
+            for (int yy = 1; yy <= maxSurfaceY; yy++)
             {
                 pos.Y = yy;
                 Block block = blockAccessor.GetBlock(pos);
 
-                pos.Y = Math.Min(yy + 1, maxY);
-                Block above = blockAccessor.GetBlock(pos);
+                if (IsAirBlock(block)) continue;
 
-                if (!IsAirBlock(block) && IsAirBlock(above)) return yy;
+                bool hasAirAbove = true;
+                for (int offset = 1; offset <= BaseYRequiredAirBlocks; offset++)
+                {
+                    pos.Y = Math.Min(yy + offset, maxY);
+                    if (!IsAirBlock(blockAccessor.GetBlock(pos)))
+                    {
+                        hasAirAbove = false;
+                        break;
+                    }
+                }
+
+                if (hasAirAbove) return yy;
             }
 
             return -1;
@@ -1336,6 +1349,40 @@ public int MaxRenderDistance
         private static bool IsAirBlock(Block block)
         {
             return block == null || block.Id == 0;
+        }
+
+        private double GetOrCreateBeaconBaseY(double x, double y, double z, string name)
+        {
+            string key = MakeBeaconBaseKey(x, y, z, name);
+            if (clientConfig?.BeaconBaseYOverrides != null && clientConfig.BeaconBaseYOverrides.TryGetValue(key, out double cached))
+            {
+                return cached;
+            }
+
+            double baseY = CalculateBeaconBaseY(x, y, z);
+            SaveBeaconBaseOverride(key, baseY);
+            return baseY;
+        }
+
+        private void SaveBeaconBaseOverride(string key, double baseY)
+        {
+            if (string.IsNullOrEmpty(key)) return;
+
+            if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
+            if (clientConfig.BeaconBaseYOverrides == null)
+            {
+                clientConfig.BeaconBaseYOverrides = new Dictionary<string, double>();
+            }
+
+            clientConfig.BeaconBaseYOverrides[key] = baseY;
+            try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
+        }
+
+        private string MakeBeaconBaseKey(double x, double y, double z, string name)
+        {
+            long seed = GetWorldSeed();
+            string pinKey = MakePinKey(x, y, z, name ?? "");
+            return seed > 0 ? $"{seed}:{pinKey}" : pinKey;
         }
 
         private void SeedBeaconOverride(object wp, double x, double y, double z, string name, bool on)
