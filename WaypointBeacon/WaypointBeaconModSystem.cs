@@ -1116,6 +1116,7 @@ public int MaxRenderDistance
 
                 bool captureInitialSeen = !seenWaypointKeysInitialized;
                 int waypointCount = 0;
+                var liveBeaconBaseKeys = new HashSet<string>();
 
 
 
@@ -1204,8 +1205,11 @@ public int MaxRenderDistance
                         ColorInt = colorInt,
                         ColorRgba = rgba
                     });
+
+                    liveBeaconBaseKeys.Add(MakeBeaconBaseKey(x, y, z, name));
                 }
 
+                PruneBeaconBaseOverrides(liveBeaconBaseKeys);
                 UpdateWorldInitializationState(waypointCount);
                 // After the first successful refresh, any newly discovered waypoint will be treated as 'new' for default-beacon purposes
                 if (!seenWaypointKeysInitialized) seenWaypointKeysInitialized = true;
@@ -1452,6 +1456,38 @@ public int MaxRenderDistance
             long seed = GetWorldSeed();
             string pinKey = MakePinKey(x, y, z, name ?? "");
             return seed > 0 ? $"{seed}:{pinKey}" : pinKey;
+        }
+
+        private void PruneBeaconBaseOverrides(HashSet<string> liveKeys)
+        {
+            if (liveKeys == null || liveKeys.Count == 0) return;
+            if (clientConfig?.BeaconBaseYOverrides == null || clientConfig.BeaconBaseYOverrides.Count == 0) return;
+
+            bool changed = false;
+            var keysToRemove = new List<string>();
+            long seed = GetWorldSeed();
+            string seedPrefix = seed > 0 ? seed + ":" : null;
+
+            foreach (var key in clientConfig.BeaconBaseYOverrides.Keys)
+            {
+                if (seedPrefix != null && !key.StartsWith(seedPrefix, StringComparison.Ordinal)) continue;
+                if (!liveKeys.Contains(key)) keysToRemove.Add(key);
+            }
+
+            if (keysToRemove.Count == 0) return;
+
+            foreach (var key in keysToRemove)
+            {
+                if (clientConfig.BeaconBaseYOverrides.Remove(key))
+                {
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
+            }
         }
 
         private void SeedBeaconOverride(object wp, double x, double y, double z, string name, bool on)
