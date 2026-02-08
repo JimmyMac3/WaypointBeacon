@@ -1360,7 +1360,7 @@ public int MaxRenderDistance
         {
             try
             {
-                int terrainY = blockAccessor.GetTerrainMapheightAt(x, z);
+                int terrainY = ResolveTerrainHeight(blockAccessor, x, z);
                 if (terrainY < 1) terrainY = 1;
                 if (terrainY > maxY) terrainY = maxY;
                 return terrainY;
@@ -1369,6 +1369,41 @@ public int MaxRenderDistance
             {
                 return Math.Max(1, maxY);
             }
+        }
+
+        private int ResolveTerrainHeight(IBlockAccessor blockAccessor, int x, int z)
+        {
+            if (blockAccessor == null) return -1;
+
+            try
+            {
+                const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var t = blockAccessor.GetType();
+
+                var m = t.GetMethod("GetTerrainMapheightAt", flags, null, new[] { typeof(BlockPos) }, null);
+                if (m != null)
+                {
+                    return (int)m.Invoke(blockAccessor, new object[] { new BlockPos(x, 0, z) });
+                }
+
+                m = t.GetMethod("GetTerrainMapheightAt", flags, null, new[] { typeof(int), typeof(int) }, null);
+                if (m != null)
+                {
+                    return (int)m.Invoke(blockAccessor, new object[] { x, z });
+                }
+
+                m = t.GetMethod("GetTerrainMapheightAt", flags, null, new[] { typeof(int), typeof(int), typeof(int) }, null);
+                if (m != null)
+                {
+                    return (int)m.Invoke(blockAccessor, new object[] { x, z, 0 });
+                }
+            }
+            catch
+            {
+                // ignore and fall through
+            }
+
+            return -1;
         }
 
         private bool IsWaypointAboveGround(IBlockAccessor blockAccessor, int x, int z, double y, int terrainY, int maxY)
