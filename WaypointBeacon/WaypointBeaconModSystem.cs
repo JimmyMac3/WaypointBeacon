@@ -756,6 +756,21 @@ public int MaxRenderDistance
 
                 var layer = GetWaypointLayer(mapManager);
                 if (layer != null && TryInvokeAddWaypoint(layer, pos)) return true;
+
+                if (mapManager != null && TryOpenMapDialog(mapManager))
+                {
+                    capi?.Event?.RegisterCallback(_ =>
+                    {
+                        try
+                        {
+                            if (TryInvokeAddWaypoint(mapManager, pos)) return;
+                            var delayedLayer = GetWaypointLayer(mapManager);
+                            if (delayedLayer != null) TryInvokeAddWaypoint(delayedLayer, pos);
+                        }
+                        catch { }
+                    }, 50);
+                    return true;
+                }
             }
             catch { }
 
@@ -834,6 +849,46 @@ public int MaxRenderDistance
                     else if (ps.Length == 3 && ps[0].ParameterType == typeof(double) && ps[1].ParameterType == typeof(double) && ps[2].ParameterType == typeof(double))
                     {
                         m.Invoke(mapManager, new object[] { pos.X, pos.Y, pos.Z });
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // ignore and keep searching
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryOpenMapDialog(object mapManager)
+        {
+            if (mapManager == null) return false;
+
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+            foreach (var m in mapManager.GetType().GetMethods(flags))
+            {
+                string n = m.Name;
+                if (n.IndexOf("map", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (n.IndexOf("open", StringComparison.OrdinalIgnoreCase) < 0 &&
+                    n.IndexOf("show", StringComparison.OrdinalIgnoreCase) < 0 &&
+                    n.IndexOf("toggle", StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
+
+                var ps = m.GetParameters();
+                try
+                {
+                    if (ps.Length == 0)
+                    {
+                        m.Invoke(mapManager, Array.Empty<object>());
+                        return true;
+                    }
+                    if (ps.Length == 1 && ps[0].ParameterType == typeof(bool))
+                    {
+                        m.Invoke(mapManager, new object[] { true });
                         return true;
                     }
                 }
