@@ -3,12 +3,15 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
 using HarmonyLib;
+using Newtonsoft.Json;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
 using Vintagestory.GameContent;
 using ProtoBuf;
@@ -141,6 +144,7 @@ namespace WaypointBeacon
 
         // ---- Client config (local only) ----
         private const string ClientConfigFileName = "waypointbeacon-client.json";
+        private const string ClientRuntimeDataFileName = "waypointbeacon-runtime.json";
 
         public class WaypointBeaconClientConfig
         {
@@ -184,14 +188,19 @@ namespace WaypointBeacon
             // Beacon max render distance in blocks (XZ only)
             public int MaxRenderDistanceXZ = 1000;
 
+        }
+
+        private WaypointBeaconClientConfig clientConfig = new WaypointBeaconClientConfig();
+        private WaypointBeaconRuntimeData runtimeData = new WaypointBeaconRuntimeData();
+
+        public class WaypointBeaconRuntimeData
+        {
             // Worlds where we've already initialized waypoint beacon overrides (per world seed)
             public List<long> InitializedWorldSeeds = new List<long>();
 
             // Cached beacon base Y (per world seed + waypoint key)
             public Dictionary<string, double> BeaconBaseYOverrides = new Dictionary<string, double>();
         }
-
-        private WaypointBeaconClientConfig clientConfig = new WaypointBeaconClientConfig();
 
         public bool GlobalBeaconsEnabled => clientConfig?.GlobalBeaconsEnabled ?? true;
 
@@ -584,6 +593,7 @@ public int MaxRenderDistance
             {
                 clientConfig = new WaypointBeaconClientConfig();
             }
+            runtimeData = LoadRuntimeData();
             clientChannel = capi.Network
                 .RegisterChannel("waypointbeacon")
                 .RegisterMessageType<WbSetPinnedPacket>()
@@ -1276,8 +1286,8 @@ public int MaxRenderDistance
             long seed = GetWorldSeed();
             if (seed == 0) return true;
 
-            if (clientConfig?.InitializedWorldSeeds == null) return false;
-            return clientConfig.InitializedWorldSeeds.Contains(seed);
+            if (runtimeData?.InitializedWorldSeeds == null) return false;
+            return runtimeData.InitializedWorldSeeds.Contains(seed);
         }
 
         private void MarkWorldSeedInitialized()
@@ -1285,22 +1295,69 @@ public int MaxRenderDistance
             long seed = GetWorldSeed();
             if (seed == 0) return;
 
-            if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
-            if (clientConfig.InitializedWorldSeeds == null)
+            if (runtimeData == null) runtimeData = new WaypointBeaconRuntimeData();
+            if (runtimeData.InitializedWorldSeeds == null)
             {
-                clientConfig.InitializedWorldSeeds = new List<long>();
+                runtimeData.InitializedWorldSeeds = new List<long>();
             }
 
-            if (!clientConfig.InitializedWorldSeeds.Contains(seed))
+            if (!runtimeData.InitializedWorldSeeds.Contains(seed))
             {
-                clientConfig.InitializedWorldSeeds.Add(seed);
-                try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
+                runtimeData.InitializedWorldSeeds.Add(seed);
+                SaveRuntimeData();
             }
         }
 
         private long GetWorldSeed()
         {
             return capi?.World?.Seed ?? 0L;
+        }
+
+        private WaypointBeaconRuntimeData LoadRuntimeData()
+        {
+            try
+            {
+                string path = GetRuntimeDataPath();
+                if (string.IsNullOrEmpty(path) || !File.Exists(path)) return new WaypointBeaconRuntimeData();
+
+                string json = File.ReadAllText(path);
+                if (string.IsNullOrWhiteSpace(json)) return new WaypointBeaconRuntimeData();
+
+                return JsonConvert.DeserializeObject<WaypointBeaconRuntimeData>(json) ?? new WaypointBeaconRuntimeData();
+            }
+            catch
+            {
+                return new WaypointBeaconRuntimeData();
+            }
+        }
+
+        private void SaveRuntimeData()
+        {
+            try
+            {
+                string path = GetRuntimeDataPath();
+                if (string.IsNullOrEmpty(path)) return;
+
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                string json = JsonConvert.SerializeObject(runtimeData ?? new WaypointBeaconRuntimeData());
+                File.WriteAllText(path, json);
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        private string GetRuntimeDataPath()
+        {
+            try
+            {
+                return Path.Combine(GamePaths.ModData, ClientRuntimeDataFileName);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private double CalculateBeaconBaseY(double x, double y, double z)
@@ -1427,7 +1484,7 @@ public int MaxRenderDistance
         private double GetOrCreateBeaconBaseY(double x, double y, double z, string name)
         {
             string key = MakeBeaconBaseKey(x, y, z, name);
-            if (clientConfig?.BeaconBaseYOverrides != null && clientConfig.BeaconBaseYOverrides.TryGetValue(key, out double cached))
+            if (runtimeData?.BeaconBaseYOverrides != null && runtimeData.BeaconBaseYOverrides.TryGetValue(key, out double cached))
             {
                 return cached;
             }
@@ -1441,14 +1498,14 @@ public int MaxRenderDistance
         {
             if (string.IsNullOrEmpty(key)) return;
 
-            if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
-            if (clientConfig.BeaconBaseYOverrides == null)
+            if (runtimeData == null) runtimeData = new WaypointBeaconRuntimeData();
+            if (runtimeData.BeaconBaseYOverrides == null)
             {
-                clientConfig.BeaconBaseYOverrides = new Dictionary<string, double>();
+                runtimeData.BeaconBaseYOverrides = new Dictionary<string, double>();
             }
 
-            clientConfig.BeaconBaseYOverrides[key] = baseY;
-            try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
+            runtimeData.BeaconBaseYOverrides[key] = baseY;
+            SaveRuntimeData();
         }
 
         private string MakeBeaconBaseKey(double x, double y, double z, string name)
@@ -1461,14 +1518,14 @@ public int MaxRenderDistance
         private void PruneBeaconBaseOverrides(HashSet<string> liveKeys)
         {
             if (liveKeys == null || liveKeys.Count == 0) return;
-            if (clientConfig?.BeaconBaseYOverrides == null || clientConfig.BeaconBaseYOverrides.Count == 0) return;
+            if (runtimeData?.BeaconBaseYOverrides == null || runtimeData.BeaconBaseYOverrides.Count == 0) return;
 
             bool changed = false;
             var keysToRemove = new List<string>();
             long seed = GetWorldSeed();
             string seedPrefix = seed > 0 ? seed + ":" : null;
 
-            foreach (var key in clientConfig.BeaconBaseYOverrides.Keys)
+            foreach (var key in runtimeData.BeaconBaseYOverrides.Keys)
             {
                 if (seedPrefix != null && !key.StartsWith(seedPrefix, StringComparison.Ordinal)) continue;
                 if (!liveKeys.Contains(key)) keysToRemove.Add(key);
@@ -1478,7 +1535,7 @@ public int MaxRenderDistance
 
             foreach (var key in keysToRemove)
             {
-                if (clientConfig.BeaconBaseYOverrides.Remove(key))
+                if (runtimeData.BeaconBaseYOverrides.Remove(key))
                 {
                     changed = true;
                 }
@@ -1486,7 +1543,7 @@ public int MaxRenderDistance
 
             if (changed)
             {
-                try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
+                SaveRuntimeData();
             }
         }
 
