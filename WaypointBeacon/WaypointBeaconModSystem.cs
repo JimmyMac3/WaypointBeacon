@@ -3,12 +3,15 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
 using HarmonyLib;
+using Newtonsoft.Json;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
 using Vintagestory.GameContent;
 using ProtoBuf;
@@ -131,9 +134,17 @@ namespace WaypointBeacon
 
 
         private const string PinsAttrKeyPrefix = "waypointbeacon:pins:";
+        private const int WorldInitStableTicksRequired = 8;
+        private const int BaseYRequiredAirBlocks = 4;
+
+        private bool worldSeedChecked;
+        private bool worldInitializationActive;
+        private int worldInitializationStableTicks;
+        private int worldInitializationLastCount = -1;
 
         // ---- Client config (local only) ----
         private const string ClientConfigFileName = "waypointbeacon-client.json";
+        private const string ClientRuntimeDataFileName = "waypointbeacon-runtime.json";
 
         public class WaypointBeaconClientConfig
         {
@@ -176,9 +187,20 @@ namespace WaypointBeacon
 
             // Beacon max render distance in blocks (XZ only)
             public int MaxRenderDistanceXZ = 1000;
+
         }
 
         private WaypointBeaconClientConfig clientConfig = new WaypointBeaconClientConfig();
+        private WaypointBeaconRuntimeData runtimeData = new WaypointBeaconRuntimeData();
+
+        public class WaypointBeaconRuntimeData
+        {
+            // Worlds where we've already initialized waypoint beacon overrides (per world seed)
+            public List<long> InitializedWorldSeeds = new List<long>();
+
+            // Cached beacon base Y (per world seed + waypoint key)
+            public Dictionary<string, double> BeaconBaseYOverrides = new Dictionary<string, double>();
+        }
 
         public bool GlobalBeaconsEnabled => clientConfig?.GlobalBeaconsEnabled ?? true;
 
@@ -571,6 +593,7 @@ public int MaxRenderDistance
             {
                 clientConfig = new WaypointBeaconClientConfig();
             }
+            runtimeData = LoadRuntimeData();
             clientChannel = capi.Network
                 .RegisterChannel("waypointbeacon")
                 .RegisterMessageType<WbSetPinnedPacket>()
@@ -591,6 +614,8 @@ public int MaxRenderDistance
             }, 500);
             capi.Input.RegisterHotKey("waypointbeacon-togglebeacons", "Beacon Manager", GlKeys.K, HotkeyType.GUIOrOtherControls);
             capi.Input.SetHotKeyHandler("waypointbeacon-togglebeacons", OnToggleBeacons);
+            capi.Input.RegisterHotKey("waypointbeacon-addwaypoint", "Add Waypoint (Look)", GlKeys.B, HotkeyType.GUIOrOtherControls);
+            capi.Input.SetHotKeyHandler("waypointbeacon-addwaypoint", OnQuickAddWaypoint);
 
             // Patch vanilla waypoint dialog to show a Beacon toggle companion dialog (1.21.6)
             WaypointDialogBeaconPatch.TryPatch(capi, this);
@@ -607,6 +632,11 @@ public int MaxRenderDistance
             tickListenerId = capi.Event.RegisterGameTickListener(_ => RefreshBeacons(), 250);
 
             capi.ShowChatMessage("[WaypointBeacon] Loaded (CGJ sentinel, matched OL/FG labels)");
+
+            worldSeedChecked = false;
+            worldInitializationActive = false;
+            worldInitializationStableTicks = 0;
+            worldInitializationLastCount = -1;
         }
 
         public override void StartServerSide(ICoreServerAPI api)
@@ -678,6 +708,164 @@ public int MaxRenderDistance
             return true;
         }
 
+        private bool OnQuickAddWaypoint(KeyCombination comb)
+        {
+            try
+            {
+                Vec3d pos = GetLookTargetPosition();
+                if (!TryOpenAddWaypointDialog(pos))
+                {
+                    capi?.Logger?.Warning("[WaypointBeacon] Failed to open Add Waypoint dialog for position {0}", pos);
+                }
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint hotkey failed: {0}", e);
+            }
+
+            return true;
+        }
+
+        private Vec3d GetLookTargetPosition()
+        {
+            try
+            {
+                var sel = capi?.World?.Player?.CurrentBlockSelection;
+                if (sel?.Position != null)
+                {
+                    return new Vec3d(sel.Position.X + 0.5, sel.Position.Y + 0.5, sel.Position.Z + 0.5);
+                }
+            }
+            catch { }
+
+            var ent = capi?.World?.Player?.Entity;
+            if (ent != null)
+            {
+                return new Vec3d(ent.Pos.X, ent.Pos.Y, ent.Pos.Z);
+            }
+
+            return new Vec3d(0, 0, 0);
+        }
+
+        private bool TryOpenAddWaypointDialog(Vec3d pos)
+        {
+            try
+            {
+                var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+                if (mapManager != null && TryInvokeAddWaypoint(mapManager, pos)) return true;
+            }
+            catch { }
+
+            try
+            {
+                var dlg = CreateAddWaypointDialog(pos);
+                if (dlg is GuiDialog guiDialog)
+                {
+                    guiDialog.TryOpen();
+                    return true;
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
+        private bool TryInvokeAddWaypoint(object mapManager, Vec3d pos)
+        {
+            if (mapManager == null) return false;
+
+            BlockPos blockPos = new BlockPos((int)Math.Floor(pos.X), (int)Math.Floor(pos.Y), (int)Math.Floor(pos.Z));
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+            foreach (var m in mapManager.GetType().GetMethods(flags))
+            {
+                string n = m.Name;
+                if (n.IndexOf("waypoint", StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
+
+                var ps = m.GetParameters();
+                try
+                {
+                    if (ps.Length == 1)
+                    {
+                        if (ps[0].ParameterType == typeof(Vec3d))
+                        {
+                            m.Invoke(mapManager, new object[] { pos });
+                            return true;
+                        }
+                        if (ps[0].ParameterType == typeof(BlockPos))
+                        {
+                            m.Invoke(mapManager, new object[] { blockPos });
+                            return true;
+                        }
+                    }
+                    else if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3d) && ps[1].ParameterType == typeof(string))
+                    {
+                        m.Invoke(mapManager, new object[] { pos, null });
+                        return true;
+                    }
+                    else if (ps.Length == 3 && ps[0].ParameterType == typeof(double) && ps[1].ParameterType == typeof(double) && ps[2].ParameterType == typeof(double))
+                    {
+                        m.Invoke(mapManager, new object[] { pos.X, pos.Y, pos.Z });
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // ignore and keep searching
+                }
+            }
+
+            return false;
+        }
+
+        private object CreateAddWaypointDialog(Vec3d pos)
+        {
+            if (capi == null) return null;
+
+            BlockPos blockPos = new BlockPos((int)Math.Floor(pos.X), (int)Math.Floor(pos.Y), (int)Math.Floor(pos.Z));
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var ctors = typeof(GuiDialogAddWayPoint).GetConstructors(flags);
+
+            foreach (var ctor in ctors)
+            {
+                var ps = ctor.GetParameters();
+                try
+                {
+                    if (ps.Length == 2 && ps[0].ParameterType == typeof(ICoreClientAPI))
+                    {
+                        if (ps[1].ParameterType == typeof(Vec3d))
+                        {
+                            return ctor.Invoke(new object[] { capi, pos });
+                        }
+                        if (ps[1].ParameterType == typeof(BlockPos))
+                        {
+                            return ctor.Invoke(new object[] { capi, blockPos });
+                        }
+                    }
+                    if (ps.Length == 3 && ps[0].ParameterType == typeof(ICoreClientAPI))
+                    {
+                        if (ps[1].ParameterType == typeof(Vec3d) && ps[2].ParameterType == typeof(string))
+                        {
+                            return ctor.Invoke(new object[] { capi, pos, null });
+                        }
+                        if (ps[1].ParameterType == typeof(BlockPos) && ps[2].ParameterType == typeof(string))
+                        {
+                            return ctor.Invoke(new object[] { capi, blockPos, null });
+                        }
+                    }
+                }
+                catch
+                {
+                    // ignore and keep searching
+                }
+            }
+
+            return null;
+        }
+
         public class WaypointRow
         {
             public int Id;
@@ -737,8 +925,12 @@ public int MaxRenderDistance
                 {
                     bool seedOn = false;
 
+                    if (worldInitializationActive)
+                    {
+                        SeedBeaconOverride(wp, x, y, z, name, false);
+                    }
                     // Only apply the default to waypoints that are newly created after initial snapshot.
-                    if (seenWaypointKeysInitialized && isNewThisSession && DefaultNewWaypointBeaconOn)
+                    else if (seenWaypointKeysInitialized && isNewThisSession && DefaultNewWaypointBeaconOn)
                     {
                         seedOn = true;
 
@@ -1088,8 +1280,13 @@ public int MaxRenderDistance
                 visibleBeacons.Clear();
 
                 if (!GlobalBeaconsEnabled) return;
+                if (!IsWaypointLayerReady()) return;
+
+                EnsureWorldInitializationState();
 
                 bool captureInitialSeen = !seenWaypointKeysInitialized;
+                int waypointCount = 0;
+                var liveBeaconBaseKeys = new HashSet<string>();
 
 
 
@@ -1103,6 +1300,8 @@ public int MaxRenderDistance
 
                 foreach (var wp in EnumerateWaypoints())
                 {
+                    waypointCount++;
+
                     if (!TryGetWaypointPos(wp, out double x, out double y, out double z)) continue;
 
                     // XZ distance only
@@ -1120,6 +1319,10 @@ public int MaxRenderDistance
                     // We seed an override once per waypoint (first time we see it) so that later vanilla pin changes
                     // do NOT affect beacon state.
                     string bKey = MakePinKey(x, y, z, name);
+                    if (worldInitializationActive && !beaconOverrides.ContainsKey(bKey))
+                    {
+                        SeedBeaconOverride(wp, x, y, z, name, false);
+                    }
                     // If another mod created a new waypoint (without the Add dialog), apply the default beacon setting
                     // once when we first notice it. Manual waypoint creation is handled by our Add dialog onSave patch,
                     // which writes an explicit override and will therefore not be overwritten here.
@@ -1130,7 +1333,11 @@ public int MaxRenderDistance
                     else if (!seenWaypointKeys.Contains(bKey))
                     {
                         seenWaypointKeys.Add(bKey);
-                        if (DefaultNewWaypointBeaconOn && !beaconOverrides.ContainsKey(bKey))
+                        if (worldInitializationActive)
+                        {
+                            SeedBeaconOverride(wp, x, y, z, name, false);
+                        }
+                        else if (DefaultNewWaypointBeaconOn && !beaconOverrides.ContainsKey(bKey))
                         {
                             SetBeaconOnForWaypointObject(wp, true);
                             // ensure local cache reflects it immediately
@@ -1162,12 +1369,18 @@ public int MaxRenderDistance
                         X = x,
                         Y = y,
                         Z = z,
+                        BaseY = GetOrCreateBeaconBaseY(x, y, z, name),
                         Name = name,
                         Icon = icon,
                         ColorInt = colorInt,
                         ColorRgba = rgba
                     });
+
+                    liveBeaconBaseKeys.Add(MakeBeaconBaseKey(x, y, z, name));
                 }
+
+                PruneBeaconBaseOverrides(liveBeaconBaseKeys);
+                UpdateWorldInitializationState(waypointCount);
                 // After the first successful refresh, any newly discovered waypoint will be treated as 'new' for default-beacon purposes
                 if (!seenWaypointKeysInitialized) seenWaypointKeysInitialized = true;
 
@@ -1175,6 +1388,346 @@ public int MaxRenderDistance
             catch (Exception e)
             {
                 capi.Logger.Error("[WaypointBeacon] RefreshBeacons exception: {0}", e);
+            }
+        }
+
+        private bool IsWaypointLayerReady()
+        {
+            var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+            if (mapManager?.MapLayers == null) return false;
+
+            var layer = mapManager.MapLayers.FirstOrDefault(l =>
+                l != null && l.GetType().Name.IndexOf("WaypointMapLayer", StringComparison.OrdinalIgnoreCase) >= 0);
+            if (layer == null) return false;
+
+            object listObj =
+                TryGetMember(layer, "ownWaypoints") ??
+                TryGetMember(layer, "OwnWaypoints") ??
+                TryGetMember(layer, "waypoints") ??
+                TryGetMember(layer, "Waypoints");
+
+            return listObj is IEnumerable;
+        }
+
+        private void EnsureWorldInitializationState()
+        {
+            if (worldSeedChecked) return;
+
+            worldSeedChecked = true;
+            worldInitializationActive = !IsWorldSeedInitialized();
+            worldInitializationStableTicks = 0;
+            worldInitializationLastCount = -1;
+        }
+
+        private void UpdateWorldInitializationState(int waypointCount)
+        {
+            if (!worldInitializationActive) return;
+
+            if (worldInitializationLastCount == waypointCount)
+            {
+                worldInitializationStableTicks++;
+            }
+            else
+            {
+                worldInitializationStableTicks = 0;
+            }
+
+            worldInitializationLastCount = waypointCount;
+
+            if (worldInitializationStableTicks >= WorldInitStableTicksRequired)
+            {
+                worldInitializationActive = false;
+                MarkWorldSeedInitialized();
+            }
+        }
+
+        private bool IsWorldSeedInitialized()
+        {
+            long seed = GetWorldSeed();
+            if (seed == 0) return true;
+
+            if (runtimeData?.InitializedWorldSeeds == null) return false;
+            return runtimeData.InitializedWorldSeeds.Contains(seed);
+        }
+
+        private void MarkWorldSeedInitialized()
+        {
+            long seed = GetWorldSeed();
+            if (seed == 0) return;
+
+            if (runtimeData == null) runtimeData = new WaypointBeaconRuntimeData();
+            if (runtimeData.InitializedWorldSeeds == null)
+            {
+                runtimeData.InitializedWorldSeeds = new List<long>();
+            }
+
+            if (!runtimeData.InitializedWorldSeeds.Contains(seed))
+            {
+                runtimeData.InitializedWorldSeeds.Add(seed);
+                SaveRuntimeData();
+            }
+        }
+
+        private long GetWorldSeed()
+        {
+            return capi?.World?.Seed ?? 0L;
+        }
+
+        private WaypointBeaconRuntimeData LoadRuntimeData()
+        {
+            try
+            {
+                string path = GetRuntimeDataPath();
+                if (string.IsNullOrEmpty(path) || !File.Exists(path)) return new WaypointBeaconRuntimeData();
+
+                string json = File.ReadAllText(path);
+                if (string.IsNullOrWhiteSpace(json)) return new WaypointBeaconRuntimeData();
+
+                return JsonConvert.DeserializeObject<WaypointBeaconRuntimeData>(json) ?? new WaypointBeaconRuntimeData();
+            }
+            catch
+            {
+                return new WaypointBeaconRuntimeData();
+            }
+        }
+
+        private void SaveRuntimeData()
+        {
+            try
+            {
+                string path = GetRuntimeDataPath();
+                if (string.IsNullOrEmpty(path)) return;
+
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                string json = JsonConvert.SerializeObject(runtimeData ?? new WaypointBeaconRuntimeData());
+                File.WriteAllText(path, json);
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        private string GetRuntimeDataPath()
+        {
+            try
+            {
+                if (capi == null) return null;
+                string dataRoot = capi.GetOrCreateDataPath("waypointbeacon");
+                return Path.Combine(dataRoot, ClientRuntimeDataFileName);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private double CalculateBeaconBaseY(double x, double y, double z)
+        {
+            var blockAccessor = capi?.World?.BlockAccessor;
+            if (blockAccessor == null) return Math.Floor(y);
+
+            int maxY = blockAccessor.MapSizeY - 1;
+            int xi = (int)Math.Floor(x);
+            int zi = (int)Math.Floor(z);
+            int terrainY = GetTerrainHeightAt(blockAccessor, xi, zi, maxY);
+
+            if (!IsWaypointAboveGround(blockAccessor, xi, zi, y, terrainY, maxY))
+            {
+                return Math.Floor(y);
+            }
+
+            int startY = Math.Min((int)Math.Floor(y), maxY - BaseYRequiredAirBlocks);
+            if (startY < terrainY) return Math.Floor(y);
+
+            int surfaceY = FindSurfaceBlockY(blockAccessor, xi, zi, startY, terrainY, maxY);
+            if (surfaceY < 0) return Math.Floor(y);
+
+            // If waypoint is below ground, keep the beacon base at the waypoint's Y.
+            if (y <= surfaceY + 0.5) return Math.Floor(y);
+
+            // Otherwise anchor the base at the first solid block with air above it.
+            return surfaceY + 1;
+        }
+
+        private int FindSurfaceBlockY(IBlockAccessor blockAccessor, int x, int z, int startY, int minY, int maxY)
+        {
+            var pos = new BlockPos(x, 1, z);
+            int maxSurfaceY = Math.Max(minY, Math.Min(startY, maxY - BaseYRequiredAirBlocks));
+
+            for (int yy = maxSurfaceY; yy >= minY; yy--)
+            {
+                pos.Y = yy;
+                Block block = blockAccessor.GetBlock(pos);
+
+                if (IsAirBlock(block)) continue;
+
+                bool hasAirAbove = true;
+                for (int offset = 1; offset <= BaseYRequiredAirBlocks; offset++)
+                {
+                    pos.Y = Math.Min(yy + offset, maxY);
+                    if (!IsAirBlock(blockAccessor.GetBlock(pos)))
+                    {
+                        hasAirAbove = false;
+                        break;
+                    }
+                }
+
+                if (hasAirAbove) return yy;
+            }
+
+            return -1;
+        }
+
+        private int GetTerrainHeightAt(IBlockAccessor blockAccessor, int x, int z, int maxY)
+        {
+            try
+            {
+                int terrainY = ResolveTerrainHeight(blockAccessor, x, z);
+                if (terrainY < 1) terrainY = 1;
+                if (terrainY > maxY) terrainY = maxY;
+                return terrainY;
+            }
+            catch
+            {
+                return Math.Max(1, maxY);
+            }
+        }
+
+        private int ResolveTerrainHeight(IBlockAccessor blockAccessor, int x, int z)
+        {
+            if (blockAccessor == null) return -1;
+
+            try
+            {
+                const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var t = blockAccessor.GetType();
+
+                var m = t.GetMethod("GetTerrainMapheightAt", flags, null, new[] { typeof(BlockPos) }, null);
+                if (m != null)
+                {
+                    return (int)m.Invoke(blockAccessor, new object[] { new BlockPos(x, 0, z) });
+                }
+
+                m = t.GetMethod("GetTerrainMapheightAt", flags, null, new[] { typeof(int), typeof(int) }, null);
+                if (m != null)
+                {
+                    return (int)m.Invoke(blockAccessor, new object[] { x, z });
+                }
+
+                m = t.GetMethod("GetTerrainMapheightAt", flags, null, new[] { typeof(int), typeof(int), typeof(int) }, null);
+                if (m != null)
+                {
+                    return (int)m.Invoke(blockAccessor, new object[] { x, z, 0 });
+                }
+            }
+            catch
+            {
+                // ignore and fall through
+            }
+
+            return -1;
+        }
+
+        private bool IsWaypointAboveGround(IBlockAccessor blockAccessor, int x, int z, double y, int terrainY, int maxY)
+        {
+            if (y <= terrainY + 0.5) return false;
+
+            var pos = new BlockPos(x, Math.Min((int)Math.Floor(y), maxY), z);
+            Block block = blockAccessor.GetBlock(pos);
+            return IsAirBlock(block);
+        }
+
+        private static bool IsAirBlock(Block block)
+        {
+            return block == null || block.Id == 0;
+        }
+
+        private double GetOrCreateBeaconBaseY(double x, double y, double z, string name)
+        {
+            string key = MakeBeaconBaseKey(x, y, z, name);
+            if (runtimeData?.BeaconBaseYOverrides != null && runtimeData.BeaconBaseYOverrides.TryGetValue(key, out double cached))
+            {
+                return cached;
+            }
+
+            double baseY = CalculateBeaconBaseY(x, y, z);
+            SaveBeaconBaseOverride(key, baseY);
+            return baseY;
+        }
+
+        private void SaveBeaconBaseOverride(string key, double baseY)
+        {
+            if (string.IsNullOrEmpty(key)) return;
+
+            if (runtimeData == null) runtimeData = new WaypointBeaconRuntimeData();
+            if (runtimeData.BeaconBaseYOverrides == null)
+            {
+                runtimeData.BeaconBaseYOverrides = new Dictionary<string, double>();
+            }
+
+            runtimeData.BeaconBaseYOverrides[key] = baseY;
+            SaveRuntimeData();
+        }
+
+        private string MakeBeaconBaseKey(double x, double y, double z, string name)
+        {
+            long seed = GetWorldSeed();
+            string pinKey = MakePinKey(x, y, z, name ?? "");
+            return seed > 0 ? $"{seed}:{pinKey}" : pinKey;
+        }
+
+        private void PruneBeaconBaseOverrides(HashSet<string> liveKeys)
+        {
+            if (liveKeys == null || liveKeys.Count == 0) return;
+            if (runtimeData?.BeaconBaseYOverrides == null || runtimeData.BeaconBaseYOverrides.Count == 0) return;
+
+            bool changed = false;
+            var keysToRemove = new List<string>();
+            long seed = GetWorldSeed();
+            string seedPrefix = seed > 0 ? seed + ":" : null;
+
+            foreach (var key in runtimeData.BeaconBaseYOverrides.Keys)
+            {
+                if (seedPrefix != null && !key.StartsWith(seedPrefix, StringComparison.Ordinal)) continue;
+                if (!liveKeys.Contains(key)) keysToRemove.Add(key);
+            }
+
+            if (keysToRemove.Count == 0) return;
+
+            foreach (var key in keysToRemove)
+            {
+                if (runtimeData.BeaconBaseYOverrides.Remove(key))
+                {
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                SaveRuntimeData();
+            }
+        }
+
+        private void SeedBeaconOverride(object wp, double x, double y, double z, string name, bool on)
+        {
+            if (wp == null) return;
+
+            string key = MakePinKey(x, y, z, name ?? "");
+            beaconOverrides[key] = on;
+
+            if (clientChannel?.Connected == true)
+            {
+                int id = GetStableWaypointId(wp, x, y, z, name ?? "");
+                clientChannel.SendPacket(new WbSetPinnedPacket
+                {
+                    WaypointId = id,
+                    Pinned = on,
+                    X = x,
+                    Y = y,
+                    Z = z,
+                    Title = name ?? ""
+                });
             }
         }
 
@@ -1774,6 +2327,7 @@ public int MaxRenderDistance
         {
             public int Id;
             public double X, Y, Z;
+            public double BaseY;
             public string Name;
             public string Icon;
             public int ColorInt;
@@ -1816,7 +2370,7 @@ public int MaxRenderDistance
                     double x = Math.Floor(b.X) + 0.5;
                     double z = Math.Floor(b.Z) + 0.5;
 
-                    double y0 = Math.Floor(b.Y);
+                    double y0 = Math.Floor(b.BaseY);
                     if (y0 < 1) y0 = 1;
                     if (y0 > worldTopY - 2) y0 = worldTopY - 2;
 
@@ -1824,7 +2378,7 @@ public int MaxRenderDistance
                     Vec3d end = new Vec3d(x, worldTopY, z);
 
 
-                    float fadeAlpha = mod?.ComputeNearFadeAlpha(camPos, x, Math.Floor(b.Y) + 0.5, z) ?? 1f;
+                    float fadeAlpha = mod?.ComputeNearFadeAlpha(camPos, x, Math.Floor(b.BaseY) + 0.5, z) ?? 1f;
                     if (fadeAlpha <= 0.01f) continue;
                     int rgbaInt = ColorIntToRenderLineRgbaInt(b.ColorInt);
                     if (rgbaInt == unchecked((int)0xFF000000)) rgbaInt = unchecked((int)0xFFFFFFFF);
@@ -1899,10 +2453,8 @@ public int MaxRenderDistance
             private readonly WaypointBeaconModSystem mod;
 
             private readonly Dictionary<string, LoadedTexture> cached = new Dictionary<string, LoadedTexture>();
-
-            // When label style includes distance, we need to rebuild textures as the player moves.
             private Vec3d lastDistancePos;
-            
+
             private static double Dist2PointToSegment(double px, double py, double ax, double ay, double bx, double by)
             {
                 double abx = bx - ax;
@@ -2037,7 +2589,7 @@ var beacons = mod.GetVisibleBeacons();
                         if (pitchUpRad < -Math.PI) pitchUpRad += Math.PI * 2.0;
                         if (pitchUpRad > Math.PI / 2.0) pitchUpRad -= Math.PI;
                         if (pitchUpRad < -Math.PI / 2.0) pitchUpRad += Math.PI;
-                        double beaconBaseY = Math.Floor(b.Y);
+                        double beaconBaseY = Math.Floor(b.BaseY);
                         double baseDy = beaconBaseY - camPos.Y;
                         double pitchToBaseRad = Math.Atan2(baseDy, dist);
 
@@ -2112,7 +2664,7 @@ var beacons = mod.GetVisibleBeacons();
                         // Always: project the waypoint's label anchor as before.
                         Vec3d worldPos = new Vec3d(
                             Math.Floor(b.X) + 0.5,
-                            Math.Floor(b.Y) + LabelWorldYOffsetBlocks,
+                            Math.Floor(b.BaseY) + LabelWorldYOffsetBlocks,
                             Math.Floor(b.Z) + 0.5
                         );
 
@@ -2133,7 +2685,7 @@ var beacons = mod.GetVisibleBeacons();
                     }
 
                     // From here down we render the label. In AutoHide mode, we already ensured proximity and anchor.
-                    float fadeAlphaLbl = mod?.ComputeNearFadeAlpha(camPos, Math.Floor(b.X) + 0.5, Math.Floor(b.Y) + 0.5, Math.Floor(b.Z) + 0.5) ?? 1f;
+                    float fadeAlphaLbl = mod?.ComputeNearFadeAlpha(camPos, Math.Floor(b.X) + 0.5, Math.Floor(b.BaseY) + 0.5, Math.Floor(b.Z) + 0.5) ?? 1f;
                     if (fadeAlphaLbl <= 0.01f) continue;
 
                     Vec4f whiteA = new Vec4f(1f, 1f, 1f, fadeAlphaLbl);
@@ -2226,6 +2778,7 @@ if (iconTex != null)
 
                     RenderLoadedTextureTint(fgTex, textX, textY, whiteA);
                 }
+
             }
 
             
