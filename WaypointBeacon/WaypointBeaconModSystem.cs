@@ -753,6 +753,9 @@ public int MaxRenderDistance
             {
                 var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
                 if (mapManager != null && TryInvokeAddWaypoint(mapManager, pos)) return true;
+
+                var layer = GetWaypointLayer(mapManager);
+                if (layer != null && TryInvokeAddWaypoint(layer, pos)) return true;
             }
             catch { }
 
@@ -761,13 +764,27 @@ public int MaxRenderDistance
                 var dlg = CreateAddWaypointDialog(pos);
                 if (dlg is GuiDialog guiDialog)
                 {
-                    guiDialog.TryOpen();
+                    TryOpenDialog(guiDialog);
                     return true;
                 }
             }
             catch { }
 
             return false;
+        }
+
+        private object GetWaypointLayer(WorldMapManager mapManager)
+        {
+            try
+            {
+                if (mapManager?.MapLayers == null) return null;
+                return mapManager.MapLayers.FirstOrDefault(l =>
+                    l != null && l.GetType().Name.IndexOf("WaypointMapLayer", StringComparison.OrdinalIgnoreCase) >= 0);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private bool TryInvokeAddWaypoint(object mapManager, Vec3d pos)
@@ -781,6 +798,14 @@ public int MaxRenderDistance
             {
                 string n = m.Name;
                 if (n.IndexOf("waypoint", StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
+
+                if (n.IndexOf("add", StringComparison.OrdinalIgnoreCase) < 0 &&
+                    n.IndexOf("open", StringComparison.OrdinalIgnoreCase) < 0 &&
+                    n.IndexOf("show", StringComparison.OrdinalIgnoreCase) < 0 &&
+                    n.IndexOf("create", StringComparison.OrdinalIgnoreCase) < 0)
                 {
                     continue;
                 }
@@ -864,6 +889,32 @@ public int MaxRenderDistance
             }
 
             return null;
+        }
+
+        private void TryOpenDialog(GuiDialog dialog)
+        {
+            if (dialog == null) return;
+
+            try
+            {
+                dialog.TryOpen();
+                return;
+            }
+            catch { }
+
+            try
+            {
+                var gui = capi?.Gui;
+                if (gui == null) return;
+
+                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var m = gui.GetType().GetMethod("OpenDialog", flags, null, new[] { typeof(GuiDialog) }, null);
+                m?.Invoke(gui, new object[] { dialog });
+            }
+            catch
+            {
+                // ignore
+            }
         }
 
         public class WaypointRow
