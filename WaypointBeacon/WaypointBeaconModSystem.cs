@@ -1352,7 +1352,9 @@ public int MaxRenderDistance
         {
             try
             {
-                return Path.Combine(GamePaths.ModData, ClientRuntimeDataFileName);
+                if (capi == null) return null;
+                string dataRoot = capi.GetOrCreateDataPath("waypointbeacon");
+                return Path.Combine(dataRoot, ClientRuntimeDataFileName);
             }
             catch
             {
