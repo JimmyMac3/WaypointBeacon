@@ -669,31 +669,32 @@ public int MaxRenderDistance
             var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
             object waypointLayer = GetWaypointMapLayerObject(mapManager);
 
-            // Strategy 1: ask the active waypoint map layer to open its add-waypoint flow.
-            try
+            // Strategy 1 (preferred): instantiate the vanilla Add Waypoint dialog
+            // with the same constructor shape used by vanilla: (ICoreClientAPI, WaypointMapLayer).
+            if (TryOpenAddWaypointDialogViaCtor(mapManager, waypointLayer))
             {
-                if (waypointLayer != null && TryInvokeAddWaypointDialogMethod(waypointLayer))
-                {
-                    return true;
-                }
-
-                if (mapManager != null && TryInvokeAddWaypointDialogMethod(mapManager))
-                {
-                    return true;
-                }
-            }
-            catch (Exception e)
-            {
-                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint direct layer invoke failed: {0}", e);
+                return true;
             }
 
-            // Strategy 2: instantiate GuiDialogAddWayPoint directly via reflection.
+            // Strategy 2 (fallback): trigger an explicit open-like method on waypoint/map systems.
+            if (TryInvokeAddWaypointOpenMethod(waypointLayer) || TryInvokeAddWaypointOpenMethod(mapManager))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryOpenAddWaypointDialogViaCtor(WorldMapManager mapManager, object waypointLayer)
+        {
             try
             {
                 var dlgType = typeof(GuiDialogAddWayPoint);
-                var ctors = dlgType.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var ctors = dlgType.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .OrderBy(c => c.GetParameters().Length)
+                    .ToArray();
 
-                foreach (var ctor in ctors.OrderBy(c => c.GetParameters().Length))
+                foreach (var ctor in ctors)
                 {
                     var ps = ctor.GetParameters();
                     object[] args = new object[ps.Length];
@@ -707,20 +708,34 @@ public int MaxRenderDistance
                         else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
                         else if (typeof(WorldMapManager).IsAssignableFrom(pt)) args[i] = mapManager;
                         else if (waypointLayer != null && pt.IsInstanceOfType(waypointLayer)) args[i] = waypointLayer;
+                        else if (pt.Name.IndexOf("WaypointMapLayer", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            // Never pass null for WaypointMapLayer-like parameters.
+                            ok = false;
+                            break;
+                        }
                         else if (!pt.IsValueType) args[i] = null;
                         else { ok = false; break; }
                     }
 
                     if (!ok) continue;
 
-                    var dlgObj = ctor.Invoke(args);
-                    if (dlgObj is GuiDialog dialog)
+                    try
                     {
-                        if (dialog.TryOpen())
+                        var dlgObj = ctor.Invoke(args);
+                        if (dlgObj is GuiDialog dialog && dialog.TryOpen())
                         {
                             capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via ctor {0}", ctor);
                             return true;
                         }
+                    }
+                    catch (TargetInvocationException tie)
+                    {
+                        capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint ctor invoke failed ({0}): {1}", ctor, tie.InnerException ?? tie);
+                    }
+                    catch (Exception e)
+                    {
+                        capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint ctor invoke failed ({0}): {1}", ctor, e);
                     }
                 }
             }
@@ -738,7 +753,7 @@ public int MaxRenderDistance
                 l != null && l.GetType().Name.IndexOf("WaypointMapLayer", StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
-        private bool TryInvokeAddWaypointDialogMethod(object target)
+        private bool TryInvokeAddWaypointOpenMethod(object target)
         {
             if (target == null) return false;
 
@@ -748,7 +763,8 @@ public int MaxRenderDistance
                 .Where(m =>
                 {
                     string n = m.Name.ToLowerInvariant();
-                    return n.Contains("way") && n.Contains("point") && n.Contains("add");
+                    // Avoid broad "add" matches that may mutate state instead of opening UI.
+                    return n.Contains("way") && n.Contains("point") && (n.Contains("open") || n.Contains("dialog"));
                 })
                 .OrderBy(m => m.GetParameters().Length)
                 .ToArray();
@@ -777,20 +793,12 @@ public int MaxRenderDistance
                 try
                 {
                     object ret = m.Invoke(target, args);
-
                     if (ret is bool b)
                     {
-                        if (b)
-                        {
-                            capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via {0}.{1}", t.Name, m.Name);
-                            return true;
-                        }
-
-                        continue;
+                        if (!b) continue;
                     }
 
-                    // Void/non-bool methods are treated as success if no exception is thrown.
-                    capi?.Logger?.Notification("[WaypointBeacon] Invoked Add Waypoint method {0}.{1}", t.Name, m.Name);
+                    capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via {0}.{1}", t.Name, m.Name);
                     return true;
                 }
                 catch
