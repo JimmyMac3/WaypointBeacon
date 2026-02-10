@@ -58,6 +58,7 @@ namespace WaypointBeacon
         private GuiDialogBeaconManagerSettings beaconManagerDialog;
         private bool beaconManagerIsOpen;
         private long tickListenerId;
+        private long lastAddWaypointHotkeyTicks;
         private BeaconLabelRenderer labelRenderer;
         private BeaconBeamRenderer beamRenderer;
 
@@ -647,6 +648,13 @@ public int MaxRenderDistance
         {
             try
             {
+                long nowTicks = DateTime.UtcNow.Ticks;
+                if (nowTicks - lastAddWaypointHotkeyTicks < TimeSpan.FromMilliseconds(175).Ticks)
+                {
+                    return true;
+                }
+                lastAddWaypointHotkeyTicks = nowTicks;
+
                 capi?.Logger?.Notification("[WaypointBeacon] Add Waypoint (Direct) hotkey pressed ({0})", comb?.ToString() ?? "unknown");
 
                 if (TryOpenAddWaypointDialogDirect())
@@ -1055,7 +1063,10 @@ public int MaxRenderDistance
                 .Where(m =>
                 {
                     string n = m.Name.ToLowerInvariant();
-                    return n.Contains("way") && n.Contains("point") && n.Contains("add");
+                    bool waypointAdd = n.Contains("way") && n.Contains("point") && n.Contains("add");
+                    bool vanillaMarkerAdd = (t.FullName ?? "").StartsWith("Vintagestory", StringComparison.OrdinalIgnoreCase)
+                        && n.Contains("marker") && n.Contains("add");
+                    return waypointAdd || vanillaMarkerAdd;
                 })
                 .OrderBy(m => m.GetParameters().Length)
                 .ToArray();
