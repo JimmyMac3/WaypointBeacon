@@ -666,14 +666,13 @@ public int MaxRenderDistance
 
         private bool TryOpenAddWaypointDialogDirect()
         {
+            var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+            object waypointLayer = GetWaypointMapLayerObject(mapManager);
+
             // Strategy 1: ask the active waypoint map layer to open its add-waypoint flow.
             try
             {
-                var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
-                var layer = mapManager?.MapLayers?.FirstOrDefault(l =>
-                    l != null && l.GetType().Name.IndexOf("WaypointMapLayer", StringComparison.OrdinalIgnoreCase) >= 0);
-
-                if (layer != null && TryInvokeAddWaypointDialogMethod(layer))
+                if (waypointLayer != null && TryInvokeAddWaypointDialogMethod(waypointLayer))
                 {
                     return true;
                 }
@@ -706,7 +705,8 @@ public int MaxRenderDistance
 
                         if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
                         else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
-                        else if (typeof(WorldMapManager).IsAssignableFrom(pt)) args[i] = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+                        else if (typeof(WorldMapManager).IsAssignableFrom(pt)) args[i] = mapManager;
+                        else if (waypointLayer != null && pt.IsInstanceOfType(waypointLayer)) args[i] = waypointLayer;
                         else if (!pt.IsValueType) args[i] = null;
                         else { ok = false; break; }
                     }
@@ -732,10 +732,17 @@ public int MaxRenderDistance
             return false;
         }
 
+        private object GetWaypointMapLayerObject(WorldMapManager mapManager)
+        {
+            return mapManager?.MapLayers?.FirstOrDefault(l =>
+                l != null && l.GetType().Name.IndexOf("WaypointMapLayer", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
         private bool TryInvokeAddWaypointDialogMethod(object target)
         {
             if (target == null) return false;
 
+            object waypointLayer = GetWaypointMapLayerObject(capi?.ModLoader?.GetModSystem<WorldMapManager>());
             var t = target.GetType();
             var methods = t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
                 .Where(m =>
@@ -759,6 +766,7 @@ public int MaxRenderDistance
                     if (typeof(KeyCombination).IsAssignableFrom(pt)) args[i] = null;
                     else if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
                     else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (waypointLayer != null && pt.IsInstanceOfType(waypointLayer)) args[i] = waypointLayer;
                     else if (!pt.IsValueType) args[i] = null;
                     else if (pt == typeof(bool)) args[i] = false;
                     else { ok = false; break; }
