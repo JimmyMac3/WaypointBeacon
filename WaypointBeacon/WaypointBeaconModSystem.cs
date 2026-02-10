@@ -682,98 +682,7 @@ public int MaxRenderDistance
                 return true;
             }
 
-            // Fallback 2: direct ctor open with best-effort layer binding.
-            if (TryOpenAddWaypointDialogViaCtorFallback(waypointLayer, mapManager))
-            {
-                return true;
-            }
-
             return false;
-        }
-
-
-        private bool TryOpenAddWaypointDialogViaCtorFallback(object waypointLayer, WorldMapManager mapManager)
-        {
-            try
-            {
-                var dlgType = typeof(GuiDialogAddWayPoint);
-                var ctors = dlgType.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                    .OrderBy(c => c.GetParameters().Length)
-                    .ToArray();
-
-                foreach (var ctor in ctors)
-                {
-                    var ps = ctor.GetParameters();
-                    object[] args = new object[ps.Length];
-                    bool ok = true;
-
-                    for (int i = 0; i < ps.Length; i++)
-                    {
-                        var pt = ps[i].ParameterType;
-
-                        if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
-                        else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
-                        else if (typeof(WorldMapManager).IsAssignableFrom(pt)) args[i] = mapManager;
-                        else if (waypointLayer != null && pt.IsInstanceOfType(waypointLayer)) args[i] = waypointLayer;
-                        else if (pt.Name.IndexOf("WaypointMapLayer", StringComparison.OrdinalIgnoreCase) >= 0) { ok = false; break; }
-                        else if (!pt.IsValueType) args[i] = null;
-                        else { ok = false; break; }
-                    }
-
-                    if (!ok) continue;
-
-                    try
-                    {
-                        var dlgObj = ctor.Invoke(args);
-                        if (dlgObj is GuiDialogAddWayPoint addDlg)
-                        {
-                            TryBindDialogToLayer(waypointLayer, addDlg);
-                            if (addDlg.TryOpen())
-                            {
-                                capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via ctor fallback {0}", ctor);
-                                return true;
-                            }
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        capi?.Logger?.Warning("[WaypointBeacon] Ctor fallback failed ({0}): {1}", ctor, e.InnerException ?? e);
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint ctor fallback failed: {0}", e);
-            }
-
-            return false;
-        }
-
-        private void TryBindDialogToLayer(object waypointLayer, GuiDialogAddWayPoint addDlg)
-        {
-            if (waypointLayer == null || addDlg == null) return;
-
-            try
-            {
-                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-                var lt = waypointLayer.GetType();
-
-                foreach (var f in lt.GetFields(flags))
-                {
-                    if (!f.FieldType.IsAssignableFrom(addDlg.GetType())) continue;
-                    if (f.GetValue(waypointLayer) == null) f.SetValue(waypointLayer, addDlg);
-                }
-
-                foreach (var p in lt.GetProperties(flags))
-                {
-                    if (!p.CanWrite) continue;
-                    if (!p.PropertyType.IsAssignableFrom(addDlg.GetType())) continue;
-                    object cur = null;
-                    try { cur = p.GetValue(waypointLayer); } catch { }
-                    if (cur == null) p.SetValue(waypointLayer, addDlg);
-                }
-            }
-            catch { }
         }
 
         private bool TryInvokeKnownAddWaypointAction(object target)
@@ -783,7 +692,8 @@ public int MaxRenderDistance
             var names = new[]
             {
                 "OnAddWaypoint", "OnAddWayPoint", "OnHotkeyAddWaypoint", "OnHotKeyAddWaypoint",
-                "OpenAddWaypointDialog", "OpenAddWayPointDialog", "ShowAddWaypointDialog", "ShowAddWayPointDialog"
+                "OpenAddWaypointDialog", "OpenAddWayPointDialog", "ShowAddWaypointDialog", "ShowAddWayPointDialog",
+                "AddWaypoint", "AddWayPoint", "OpenNewWaypointDialog", "ShowNewWaypointDialog"
             };
 
             foreach (string name in names)
@@ -806,7 +716,8 @@ public int MaxRenderDistance
         {
             try
             {
-                object waypointLayer = GetWaypointMapLayerObject(capi?.ModLoader?.GetModSystem<WorldMapManager>());
+                var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+                object waypointLayer = GetWaypointMapLayerObject(mapManager);
                 var ps = method.GetParameters();
                 object[] args = new object[ps.Length];
 
@@ -817,18 +728,22 @@ public int MaxRenderDistance
                     if (typeof(KeyCombination).IsAssignableFrom(pt)) args[i] = CreateDirectAddWaypointKeyCombination();
                     else if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
                     else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (typeof(WorldMapManager).IsAssignableFrom(pt)) args[i] = mapManager;
+                    else if (typeof(IWorldAccessor).IsAssignableFrom(pt)) args[i] = capi?.World;
+                    else if (typeof(IPlayer).IsAssignableFrom(pt)) args[i] = capi?.World?.Player;
                     else if (waypointLayer != null && pt.IsInstanceOfType(waypointLayer)) args[i] = waypointLayer;
-                    else if (!pt.IsValueType) args[i] = null;
-                    else if (pt == typeof(bool)) args[i] = false;
-                    else return false;
+                    else if (pt.IsValueType) args[i] = Activator.CreateInstance(pt);
+                    else if (pt == typeof(string)) args[i] = string.Empty;
+                    else args[i] = null;
                 }
 
                 object ret = method.Invoke(target, args);
                 if (ret is bool b) return b;
                 return true;
             }
-            catch
+            catch (Exception e)
             {
+                capi?.Logger?.Debug("[WaypointBeacon] Add Waypoint invoke failed on {0}.{1}: {2}", target?.GetType()?.Name, method?.Name, e.InnerException ?? e);
                 return false;
             }
         }
