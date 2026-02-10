@@ -747,7 +747,7 @@ public int MaxRenderDistance
             try
             {
                 var comb = new KeyCombination();
-                comb.KeyCode = GlKeys.B;
+                comb.KeyCode = (int)GlKeys.B;
                 return comb;
             }
             catch
