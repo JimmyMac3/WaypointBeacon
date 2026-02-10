@@ -589,8 +589,9 @@ public int MaxRenderDistance
                 clientChannel.SendPacket(new WbRequestPinsPacket());
                 capi.Logger.Notification("[WaypointBeacon] Requested saved pin overrides from server");
             }, 500);
-            capi.Input.RegisterHotKey("waypointbeacon-togglebeacons", "Beacon Manager", GlKeys.B, HotkeyType.GUIOrOtherControls);
+            capi.Input.RegisterHotKey("waypointbeacon-togglebeacons", "Beacon Manager", GlKeys.B, HotkeyType.CharacterControls);
             capi.Input.SetHotKeyHandler("waypointbeacon-togglebeacons", OnToggleBeacons);
+            NormalizeBeaconManagerHotkey();
 
             // Patch vanilla waypoint dialog to show a Beacon toggle companion dialog (1.21.6)
             WaypointDialogBeaconPatch.TryPatch(capi, this);
@@ -636,6 +637,59 @@ public int MaxRenderDistance
             };
             api.Logger.Notification("[WaypointBeacon] ServerSide loaded, channel registered");
 
+        }
+
+
+        private void NormalizeBeaconManagerHotkey()
+        {
+            try
+            {
+                var input = capi?.Input;
+                if (input == null) return;
+
+                var getByCode = input.GetType().GetMethod("GetHotKeyByCode", BindingFlags.Instance | BindingFlags.Public);
+                if (getByCode == null) return;
+
+                object hotKey = getByCode.Invoke(input, new object[] { "waypointbeacon-togglebeacons" });
+                if (hotKey == null) return;
+
+                var hotKeyType = hotKey.GetType();
+                var currentMappingProp = hotKeyType.GetProperty("CurrentMapping", BindingFlags.Instance | BindingFlags.Public);
+                var defaultMappingProp = hotKeyType.GetProperty("DefaultMapping", BindingFlags.Instance | BindingFlags.Public);
+                object mapping = currentMappingProp?.GetValue(hotKey) ?? defaultMappingProp?.GetValue(hotKey);
+                if (mapping == null) return;
+
+                var mapType = mapping.GetType();
+                var keyCodeProp = mapType.GetProperty("KeyCode", BindingFlags.Instance | BindingFlags.Public);
+                var ctrlProp = mapType.GetProperty("Ctrl", BindingFlags.Instance | BindingFlags.Public);
+                var altProp = mapType.GetProperty("Alt", BindingFlags.Instance | BindingFlags.Public);
+                var shiftProp = mapType.GetProperty("Shift", BindingFlags.Instance | BindingFlags.Public);
+
+                if (keyCodeProp == null) return;
+
+                object rawKeyCode = keyCodeProp.GetValue(mapping);
+                GlKeys currentKey = rawKeyCode is GlKeys gk ? gk : (GlKeys)Convert.ToInt32(rawKeyCode);
+
+                bool hasCtrl = ctrlProp != null && Convert.ToBoolean(ctrlProp.GetValue(mapping));
+                bool hasAlt = altProp != null && Convert.ToBoolean(altProp.GetValue(mapping));
+                bool hasShift = shiftProp != null && Convert.ToBoolean(shiftProp.GetValue(mapping));
+
+                // Migrate legacy default from K -> B only for plain, unmodified mapping.
+                if (!hasCtrl && !hasAlt && !hasShift && currentKey == GlKeys.K)
+                {
+                    if (rawKeyCode is GlKeys) keyCodeProp.SetValue(mapping, GlKeys.B);
+                    else keyCodeProp.SetValue(mapping, (int)GlKeys.B);
+                    currentMappingProp?.SetValue(hotKey, mapping);
+                    capi.Logger.Notification("[WaypointBeacon] Migrated Beacon Manager hotkey from K to B");
+                    currentKey = GlKeys.B;
+                }
+
+                capi.Logger.Notification("[WaypointBeacon] Beacon Manager hotkey active on {0}", currentKey);
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Warning("[WaypointBeacon] Could not inspect/migrate Beacon Manager hotkey: {0}", e);
+            }
         }
 
         private bool OnToggleBeacons(KeyCombination comb)
