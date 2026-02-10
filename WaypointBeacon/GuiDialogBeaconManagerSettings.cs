@@ -79,7 +79,7 @@ namespace WaypointBeacon
             SingleComposer?.Dispose();
             SingleComposer = api.Gui.CreateCompo("waypointbeacon-beaconmanager", dialogBounds)
                 .AddDialogBG(bgBounds, true)
-                .AddDialogTitleBar("Beacon Manager (B)", OnClose);
+                .AddDialogTitleBar("Beacon Manager (K)", OnClose);
 
             // Layout
             int pad = 18;

@@ -589,9 +589,11 @@ public int MaxRenderDistance
                 clientChannel.SendPacket(new WbRequestPinsPacket());
                 capi.Logger.Notification("[WaypointBeacon] Requested saved pin overrides from server");
             }, 500);
-            capi.Input.RegisterHotKey("waypointbeacon-togglebeacons", "Beacon Manager", GlKeys.B, HotkeyType.CharacterControls);
+            capi.Input.RegisterHotKey("waypointbeacon-togglebeacons", "Beacon Manager", GlKeys.K, HotkeyType.GUIOrOtherControls);
             capi.Input.SetHotKeyHandler("waypointbeacon-togglebeacons", OnToggleBeacons);
-            NormalizeBeaconManagerHotkey();
+
+            capi.Input.RegisterHotKey("waypointbeacon-addwaypointdirect", "Add Waypoint (Direct)", GlKeys.B, HotkeyType.CharacterControls);
+            capi.Input.SetHotKeyHandler("waypointbeacon-addwaypointdirect", OnAddWaypointDirect);
 
             // Patch vanilla waypoint dialog to show a Beacon toggle companion dialog (1.21.6)
             WaypointDialogBeaconPatch.TryPatch(capi, this);
@@ -640,56 +642,156 @@ public int MaxRenderDistance
         }
 
 
-        private void NormalizeBeaconManagerHotkey()
+
+        private bool OnAddWaypointDirect(KeyCombination comb)
         {
             try
             {
-                var input = capi?.Input;
-                if (input == null) return;
+                capi?.Logger?.Notification("[WaypointBeacon] Add Waypoint (Direct) hotkey pressed ({0})", comb?.ToString() ?? "unknown");
 
-                var getByCode = input.GetType().GetMethod("GetHotKeyByCode", BindingFlags.Instance | BindingFlags.Public);
-                if (getByCode == null) return;
-
-                object hotKey = getByCode.Invoke(input, new object[] { "waypointbeacon-togglebeacons" });
-                if (hotKey == null) return;
-
-                var hotKeyType = hotKey.GetType();
-                var currentMappingProp = hotKeyType.GetProperty("CurrentMapping", BindingFlags.Instance | BindingFlags.Public);
-                var defaultMappingProp = hotKeyType.GetProperty("DefaultMapping", BindingFlags.Instance | BindingFlags.Public);
-                object mapping = currentMappingProp?.GetValue(hotKey) ?? defaultMappingProp?.GetValue(hotKey);
-                if (mapping == null) return;
-
-                var mapType = mapping.GetType();
-                var keyCodeProp = mapType.GetProperty("KeyCode", BindingFlags.Instance | BindingFlags.Public);
-                var ctrlProp = mapType.GetProperty("Ctrl", BindingFlags.Instance | BindingFlags.Public);
-                var altProp = mapType.GetProperty("Alt", BindingFlags.Instance | BindingFlags.Public);
-                var shiftProp = mapType.GetProperty("Shift", BindingFlags.Instance | BindingFlags.Public);
-
-                if (keyCodeProp == null) return;
-
-                object rawKeyCode = keyCodeProp.GetValue(mapping);
-                GlKeys currentKey = rawKeyCode is GlKeys gk ? gk : (GlKeys)Convert.ToInt32(rawKeyCode);
-
-                bool hasCtrl = ctrlProp != null && Convert.ToBoolean(ctrlProp.GetValue(mapping));
-                bool hasAlt = altProp != null && Convert.ToBoolean(altProp.GetValue(mapping));
-                bool hasShift = shiftProp != null && Convert.ToBoolean(shiftProp.GetValue(mapping));
-
-                // Migrate legacy default from K -> B only for plain, unmodified mapping.
-                if (!hasCtrl && !hasAlt && !hasShift && currentKey == GlKeys.K)
+                if (TryOpenAddWaypointDialogDirect())
                 {
-                    if (rawKeyCode is GlKeys) keyCodeProp.SetValue(mapping, GlKeys.B);
-                    else keyCodeProp.SetValue(mapping, (int)GlKeys.B);
-                    currentMappingProp?.SetValue(hotKey, mapping);
-                    capi.Logger.Notification("[WaypointBeacon] Migrated Beacon Manager hotkey from K to B");
-                    currentKey = GlKeys.B;
+                    return true;
                 }
 
-                capi.Logger.Notification("[WaypointBeacon] Beacon Manager hotkey active on {0}", currentKey);
+                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint (Direct) hotkey was handled but no compatible vanilla open-dialog path was found.");
             }
             catch (Exception e)
             {
-                capi?.Logger?.Warning("[WaypointBeacon] Could not inspect/migrate Beacon Manager hotkey: {0}", e);
+                capi?.Logger?.Error("[WaypointBeacon] Failed to open Add Waypoint (Direct) dialog: {0}", e);
             }
+
+            return false;
+        }
+
+        private bool TryOpenAddWaypointDialogDirect()
+        {
+            // Strategy 1: ask the active waypoint map layer to open its add-waypoint flow.
+            try
+            {
+                var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+                var layer = mapManager?.MapLayers?.FirstOrDefault(l =>
+                    l != null && l.GetType().Name.IndexOf("WaypointMapLayer", StringComparison.OrdinalIgnoreCase) >= 0);
+
+                if (layer != null && TryInvokeAddWaypointDialogMethod(layer))
+                {
+                    return true;
+                }
+
+                if (mapManager != null && TryInvokeAddWaypointDialogMethod(mapManager))
+                {
+                    return true;
+                }
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint direct layer invoke failed: {0}", e);
+            }
+
+            // Strategy 2: instantiate GuiDialogAddWayPoint directly via reflection.
+            try
+            {
+                var dlgType = typeof(GuiDialogAddWayPoint);
+                var ctors = dlgType.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+                foreach (var ctor in ctors.OrderBy(c => c.GetParameters().Length))
+                {
+                    var ps = ctor.GetParameters();
+                    object[] args = new object[ps.Length];
+                    bool ok = true;
+
+                    for (int i = 0; i < ps.Length; i++)
+                    {
+                        var pt = ps[i].ParameterType;
+
+                        if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
+                        else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
+                        else if (typeof(WorldMapManager).IsAssignableFrom(pt)) args[i] = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+                        else if (!pt.IsValueType) args[i] = null;
+                        else { ok = false; break; }
+                    }
+
+                    if (!ok) continue;
+
+                    var dlgObj = ctor.Invoke(args);
+                    if (dlgObj is GuiDialog dialog)
+                    {
+                        if (dialog.TryOpen())
+                        {
+                            capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via ctor {0}", ctor);
+                            return true;
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint direct ctor path failed: {0}", e);
+            }
+
+            return false;
+        }
+
+        private bool TryInvokeAddWaypointDialogMethod(object target)
+        {
+            if (target == null) return false;
+
+            var t = target.GetType();
+            var methods = t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Where(m =>
+                {
+                    string n = m.Name.ToLowerInvariant();
+                    return n.Contains("way") && n.Contains("point") && n.Contains("add");
+                })
+                .OrderBy(m => m.GetParameters().Length)
+                .ToArray();
+
+            foreach (var m in methods)
+            {
+                var ps = m.GetParameters();
+                object[] args = new object[ps.Length];
+                bool ok = true;
+
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    var pt = ps[i].ParameterType;
+
+                    if (typeof(KeyCombination).IsAssignableFrom(pt)) args[i] = null;
+                    else if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (!pt.IsValueType) args[i] = null;
+                    else if (pt == typeof(bool)) args[i] = false;
+                    else { ok = false; break; }
+                }
+
+                if (!ok) continue;
+
+                try
+                {
+                    object ret = m.Invoke(target, args);
+
+                    if (ret is bool b)
+                    {
+                        if (b)
+                        {
+                            capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via {0}.{1}", t.Name, m.Name);
+                            return true;
+                        }
+
+                        continue;
+                    }
+
+                    // Void/non-bool methods are treated as success if no exception is thrown.
+                    capi?.Logger?.Notification("[WaypointBeacon] Invoked Add Waypoint method {0}.{1}", t.Name, m.Name);
+                    return true;
+                }
+                catch
+                {
+                    // Try next candidate method.
+                }
+            }
+
+            return false;
         }
 
         private bool OnToggleBeacons(KeyCombination comb)
