@@ -589,7 +589,7 @@ public int MaxRenderDistance
                 clientChannel.SendPacket(new WbRequestPinsPacket());
                 capi.Logger.Notification("[WaypointBeacon] Requested saved pin overrides from server");
             }, 500);
-            capi.Input.RegisterHotKey("waypointbeacon-togglebeacons", "Beacon Manager", GlKeys.K, HotkeyType.GUIOrOtherControls);
+            capi.Input.RegisterHotKey("waypointbeacon-togglebeacons", "Beacon Manager", GlKeys.B, HotkeyType.GUIOrOtherControls);
             capi.Input.SetHotKeyHandler("waypointbeacon-togglebeacons", OnToggleBeacons);
 
             // Patch vanilla waypoint dialog to show a Beacon toggle companion dialog (1.21.6)
@@ -642,6 +642,8 @@ public int MaxRenderDistance
         {
             try
             {
+                capi?.Logger?.Notification("[WaypointBeacon] Beacon Manager hotkey pressed ({0})", comb?.ToString() ?? "unknown");
+
                 // Reliable toggle: don't use TryClose() as an "is open" test.
                 // We track open/closed via the dialog's OnGuiOpened/OnGuiClosed callbacks.
                 if (beaconManagerIsOpen && beaconManagerDialog != null)
