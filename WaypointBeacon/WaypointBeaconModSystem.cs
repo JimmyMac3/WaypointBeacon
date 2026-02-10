@@ -669,7 +669,13 @@ public int MaxRenderDistance
             var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
             object waypointLayer = GetWaypointMapLayerObject(mapManager);
 
-            // Preferred: forward to vanilla's own Add Waypoint hotkey handler.
+            // Preferred: trigger vanilla Add Waypoint by code through input/hotkey manager.
+            if (TryTriggerVanillaAddWaypointByCode())
+            {
+                return true;
+            }
+
+            // Secondary: forward to vanilla hotkey object/handler.
             if (TryInvokeVanillaAddWaypointHotkey())
             {
                 return true;
@@ -688,6 +694,105 @@ public int MaxRenderDistance
             }
 
             return false;
+        }
+
+        private bool TryTriggerVanillaAddWaypointByCode()
+        {
+            try
+            {
+                var input = capi?.Input;
+                if (input == null) return false;
+
+                var codes = new List<string>
+                {
+                    "addwaypoint", "add-waypoint", "addWaypoint", "worldmap-addwaypoint", "hotkey-addwaypoint"
+                };
+
+                // Discover extra candidate codes from registered hotkeys
+                try
+                {
+                    object hotkeysObj =
+                        TryGetMember(input, "HotKeys") ??
+                        TryGetMember(input, "hotKeys") ??
+                        TryGetMember(input, "Hotkeys") ??
+                        TryGetMember(input, "hotkeys");
+
+                    if (hotkeysObj is System.Collections.IDictionary dict)
+                    {
+                        foreach (System.Collections.DictionaryEntry de in dict)
+                        {
+                            if (!IsLikelyAddWaypointHotkey(de.Value)) continue;
+                            string c = (TryGetMember(de.Value, "Code") ?? TryGetMember(de.Value, "code") ?? "").ToString();
+                            if (!string.IsNullOrWhiteSpace(c) && !codes.Contains(c)) codes.Add(c);
+                        }
+                    }
+                }
+                catch { }
+
+                var methods = input.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .Where(m => m.Name.IndexOf("trigger", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                                m.Name.IndexOf("hotkey", StringComparison.OrdinalIgnoreCase) >= 0)
+                    .ToArray();
+
+                foreach (var code in codes)
+                {
+                    foreach (var m in methods)
+                    {
+                        if (TryInvokeTriggerMethod(input, m, code))
+                        {
+                            capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via trigger-by-code '{0}' using {1}", code, m.Name);
+                            return true;
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] Trigger-by-code path failed: {0}", e);
+            }
+
+            return false;
+        }
+
+        private bool TryInvokeTriggerMethod(object target, MethodInfo method, string hotkeyCode)
+        {
+            try
+            {
+                var ps = method.GetParameters();
+                object[] args = new object[ps.Length];
+
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    var pt = ps[i].ParameterType;
+                    if (pt == typeof(string))
+                    {
+                        args[i] = hotkeyCode;
+                    }
+                    else if (typeof(KeyCombination).IsAssignableFrom(pt))
+                    {
+                        args[i] = CreateDirectAddWaypointKeyCombination();
+                    }
+                    else if (pt == typeof(bool))
+                    {
+                        // conservative defaults for optional trigger flags
+                        args[i] = false;
+                    }
+                    else if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (typeof(IWorldAccessor).IsAssignableFrom(pt)) args[i] = capi?.World;
+                    else if (typeof(IPlayer).IsAssignableFrom(pt)) args[i] = capi?.World?.Player;
+                    else if (pt.IsValueType) args[i] = Activator.CreateInstance(pt);
+                    else args[i] = null;
+                }
+
+                object ret = method.Invoke(target, args);
+                if (ret is bool b) return b;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private bool TryInvokeVanillaAddWaypointHotkey()
