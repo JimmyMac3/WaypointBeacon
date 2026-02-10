@@ -669,20 +669,193 @@ public int MaxRenderDistance
             var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
             object waypointLayer = GetWaypointMapLayerObject(mapManager);
 
-            // Use vanilla action methods to open the dialog, so all internal state is initialized
-            // exactly as when the map UI opens Add Waypoint.
+            // Preferred: forward to vanilla's own Add Waypoint hotkey handler.
+            if (TryInvokeVanillaAddWaypointHotkey())
+            {
+                return true;
+            }
+
+            // Fallback 1: invoke known action methods on layer/map systems.
             if (TryInvokeKnownAddWaypointAction(waypointLayer) || TryInvokeKnownAddWaypointAction(mapManager))
             {
                 return true;
             }
 
-            // Fallback 1: search add-waypoint methods (still action-based).
+            // Fallback 2: search add-waypoint methods (still action-based).
             if (TryInvokeAddWaypointOpenMethod(waypointLayer) || TryInvokeAddWaypointOpenMethod(mapManager))
             {
                 return true;
             }
 
             return false;
+        }
+
+        private bool TryInvokeVanillaAddWaypointHotkey()
+        {
+            try
+            {
+                var input = capi?.Input;
+                if (input == null) return false;
+
+                var hk = FindVanillaAddWaypointHotkey(input);
+                if (hk == null) return false;
+
+                var comb = CreateDirectAddWaypointKeyCombination();
+                if (comb == null) comb = new KeyCombination();
+
+                // 1) Try callable methods first.
+                var methods = hk.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                foreach (var m in methods)
+                {
+                    string n = m.Name.ToLowerInvariant();
+                    if (!(n.Contains("trigger") || n.Contains("invoke") || n.Contains("handler") || n.Contains("execute"))) continue;
+
+                    if (TryInvokeAddWaypointMethod(hk, m))
+                    {
+                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey method {0}.{1}", hk.GetType().Name, m.Name);
+                        return true;
+                    }
+
+                    // Direct invoke with our keycomb if it expects exactly one KeyCombination.
+                    var ps = m.GetParameters();
+                    if (ps.Length == 1 && typeof(KeyCombination).IsAssignableFrom(ps[0].ParameterType))
+                    {
+                        try
+                        {
+                            object ret = m.Invoke(hk, new object[] { comb });
+                            if (ret is bool b && !b) continue;
+                            capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey direct invoke {0}.{1}", hk.GetType().Name, m.Name);
+                            return true;
+                        }
+                        catch { }
+                    }
+                }
+
+                // 2) Try delegate fields/properties.
+                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                foreach (var f in hk.GetType().GetFields(flags))
+                {
+                    if (!typeof(Delegate).IsAssignableFrom(f.FieldType)) continue;
+                    if (!f.Name.ToLowerInvariant().Contains("handler")) continue;
+                    var del = f.GetValue(hk) as Delegate;
+                    if (TryInvokeDelegateForHotkey(del, comb))
+                    {
+                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey delegate field {0}", f.Name);
+                        return true;
+                    }
+                }
+
+                foreach (var pr in hk.GetType().GetProperties(flags))
+                {
+                    if (!pr.CanRead) continue;
+                    if (!typeof(Delegate).IsAssignableFrom(pr.PropertyType)) continue;
+                    if (!pr.Name.ToLowerInvariant().Contains("handler")) continue;
+                    var del = pr.GetValue(hk) as Delegate;
+                    if (TryInvokeDelegateForHotkey(del, comb))
+                    {
+                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey delegate property {0}", pr.Name);
+                        return true;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] Vanilla Add Waypoint hotkey invoke failed: {0}", e);
+            }
+
+            return false;
+        }
+
+        private object FindVanillaAddWaypointHotkey(object input)
+        {
+            try
+            {
+                var t = input.GetType();
+                var getByCode = t.GetMethod("GetHotKeyByCode", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+                string[] codes = { "addwaypoint", "add-waypoint", "addWaypoint", "worldmap-addwaypoint", "hotkey-addwaypoint" };
+                if (getByCode != null)
+                {
+                    foreach (var code in codes)
+                    {
+                        try
+                        {
+                            var hk = getByCode.Invoke(input, new object[] { code });
+                            if (hk != null) return hk;
+                        }
+                        catch { }
+                    }
+                }
+
+                object hotkeysObj =
+                    TryGetMember(input, "HotKeys") ??
+                    TryGetMember(input, "hotKeys") ??
+                    TryGetMember(input, "Hotkeys") ??
+                    TryGetMember(input, "hotkeys");
+
+                if (hotkeysObj is System.Collections.IDictionary dict)
+                {
+                    foreach (System.Collections.DictionaryEntry de in dict)
+                    {
+                        if (de.Value == null) continue;
+                        if (IsLikelyAddWaypointHotkey(de.Value)) return de.Value;
+                    }
+                }
+                else if (hotkeysObj is System.Collections.IEnumerable en)
+                {
+                    foreach (var item in en)
+                    {
+                        if (item == null) continue;
+                        if (IsLikelyAddWaypointHotkey(item)) return item;
+                    }
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        private bool IsLikelyAddWaypointHotkey(object hk)
+        {
+            if (hk == null) return false;
+            string code = (TryGetMember(hk, "Code") ?? TryGetMember(hk, "code") ?? "").ToString();
+            string name = (TryGetMember(hk, "Name") ?? TryGetMember(hk, "name") ?? TryGetMember(hk, "Description") ?? "").ToString();
+            string probe = (code + " " + name).ToLowerInvariant();
+
+            if (probe.Contains("waypoint") && probe.Contains("add"))
+            {
+                if (probe.Contains("waypointbeacon")) return false;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryInvokeDelegateForHotkey(Delegate del, KeyCombination comb)
+        {
+            if (del == null) return false;
+            try
+            {
+                var ps = del.Method.GetParameters();
+                object[] args = new object[ps.Length];
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    var pt = ps[i].ParameterType;
+                    if (typeof(KeyCombination).IsAssignableFrom(pt)) args[i] = comb;
+                    else if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (pt.IsValueType) args[i] = Activator.CreateInstance(pt);
+                    else args[i] = null;
+                }
+
+                object ret = del.DynamicInvoke(args);
+                if (ret is bool b) return b;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private bool TryInvokeKnownAddWaypointAction(object target)
