@@ -687,8 +687,14 @@ public int MaxRenderDistance
                 return true;
             }
 
-            // Fallback 2: search add-waypoint methods (still action-based).
+            // Fallback 2: search add-waypoint methods on layer/map systems.
             if (TryInvokeAddWaypointOpenMethod(waypointLayer) || TryInvokeAddWaypointOpenMethod(mapManager))
+            {
+                return true;
+            }
+
+            // Fallback 3: scan loaded client mod systems for add-waypoint/marker actions.
+            if (TryInvokeAnyModSystemAddWaypointAction())
             {
                 return true;
             }
@@ -793,6 +799,101 @@ public int MaxRenderDistance
             {
                 return false;
             }
+        }
+
+        private bool TryInvokeAnyModSystemAddWaypointAction()
+        {
+            try
+            {
+                var loader = capi?.ModLoader;
+                if (loader == null) return false;
+
+                var visited = new HashSet<object>();
+                foreach (var sys in EnumerateLikelyClientModSystems(loader))
+                {
+                    if (sys == null) continue;
+                    if (!visited.Add(sys)) continue;
+
+                    if (TryInvokeAddWaypointOpenMethod(sys))
+                    {
+                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via mod system {0}", sys.GetType().FullName);
+                        return true;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] Mod-system add-waypoint fallback failed: {0}", e);
+            }
+
+            return false;
+        }
+
+        private IEnumerable<object> EnumerateLikelyClientModSystems(object loader)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var t = loader.GetType();
+
+            // First check common names that often store systems.
+            foreach (string name in new[] { "Systems", "systems", "LoadedSystems", "loadedSystems", "ModSystems", "modSystems", "clientSystems" })
+            {
+                object val = null;
+                try { val = TryGetMember(loader, name); } catch { }
+                foreach (var obj in FlattenObjects(val)) yield return obj;
+            }
+
+            // Then inspect all members that look like system collections.
+            foreach (var f in t.GetFields(flags))
+            {
+                object val = null;
+                try { val = f.GetValue(loader); } catch { }
+                if (!LooksLikeSystemContainer(f.Name, f.FieldType)) continue;
+                foreach (var obj in FlattenObjects(val)) yield return obj;
+            }
+
+            foreach (var p in t.GetProperties(flags))
+            {
+                if (!p.CanRead) continue;
+                object val = null;
+                try { val = p.GetValue(loader); } catch { }
+                if (!LooksLikeSystemContainer(p.Name, p.PropertyType)) continue;
+                foreach (var obj in FlattenObjects(val)) yield return obj;
+            }
+        }
+
+        private bool LooksLikeSystemContainer(string name, Type type)
+        {
+            string n = (name ?? "").ToLowerInvariant();
+            string tn = (type?.Name ?? "").ToLowerInvariant();
+            return n.Contains("system") || n.Contains("mod") || tn.Contains("list") || tn.Contains("dict") || tn.Contains("enumerable");
+        }
+
+        private IEnumerable<object> FlattenObjects(object val)
+        {
+            if (val == null) yield break;
+
+            if (val is System.Collections.IDictionary dict)
+            {
+                foreach (System.Collections.DictionaryEntry de in dict)
+                {
+                    if (de.Value != null) yield return de.Value;
+                }
+                yield break;
+            }
+
+            if (val is System.Collections.IEnumerable en && !(val is string))
+            {
+                foreach (var item in en)
+                {
+                    if (item == null) continue;
+                    // KeyValuePair-like support
+                    object maybeVal = TryGetMember(item, "Value") ?? item;
+                    if (maybeVal != null) yield return maybeVal;
+                }
+                yield break;
+            }
+
+            yield return val;
         }
 
         private bool TryInvokeVanillaAddWaypointHotkey()
@@ -1055,7 +1156,7 @@ public int MaxRenderDistance
                 .Where(m =>
                 {
                     string n = m.Name.ToLowerInvariant();
-                    return n.Contains("way") && n.Contains("point") && n.Contains("add");
+                    return (n.Contains("way") && n.Contains("point") && n.Contains("add")) || (n.Contains("marker") && n.Contains("add"));
                 })
                 .OrderBy(m => m.GetParameters().Length)
                 .ToArray();
