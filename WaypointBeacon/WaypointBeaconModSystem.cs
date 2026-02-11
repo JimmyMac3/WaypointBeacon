@@ -988,6 +988,7 @@ public int MaxRenderDistance
                     .FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
 
                 if (method == null) continue;
+                if (!IsSafeAddWaypointMethod(method)) continue;
                 if (TryInvokeAddWaypointMethod(target, method))
                 {
                     capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via {0}.{1}", target.GetType().Name, method.Name);
@@ -996,6 +997,29 @@ public int MaxRenderDistance
             }
 
             return false;
+        }
+
+        private bool IsSafeAddWaypointMethod(MethodInfo method)
+        {
+            if (method == null) return false;
+
+            string n = (method.Name ?? "").ToLowerInvariant();
+            if (n.StartsWith("oncmd")) return false;
+            if (n.Contains("temporary")) return false;
+
+            var ps = method.GetParameters();
+            foreach (var p in ps)
+            {
+                var pt = p.ParameterType;
+                string ptn = pt.FullName ?? pt.Name ?? "";
+
+                if (typeof(IServerPlayer).IsAssignableFrom(pt)) return false;
+                if (ptn.IndexOf("ServerPlayer", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+                if (ptn.IndexOf("TextCommandCallingArgs", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+                if (ptn.IndexOf("Waypoint", StringComparison.OrdinalIgnoreCase) >= 0 && !ptn.Contains("WaypointMapLayer")) return false;
+            }
+
+            return true;
         }
 
         private bool TryInvokeAddWaypointMethod(object target, MethodInfo method)
@@ -1068,6 +1092,7 @@ public int MaxRenderDistance
                     bool vanillaMarkerAction = isVanillaType && n.Contains("marker") && (n.Contains("add") || n.Contains("new") || n.Contains("create"));
                     return waypointAction || vanillaMarkerAction;
                 })
+                .Where(IsSafeAddWaypointMethod)
                 .OrderBy(m => m.GetParameters().Length)
                 .ToArray();
 
