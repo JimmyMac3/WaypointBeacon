@@ -701,79 +701,6 @@ public int MaxRenderDistance
                 return true;
             }
 
-            // Fallback 3: direct vanilla dialog ctor with live waypoint layer.
-            if (TryOpenAddWaypointDialogViaCtorFallback(waypointLayer))
-            {
-                return true;
-            }
-
-            return false;
-        }
-
-
-        private bool TryOpenAddWaypointDialogViaCtorFallback(object waypointLayer)
-        {
-            if (waypointLayer == null) return false;
-
-            try
-            {
-                var dlgType = typeof(GuiDialogAddWayPoint);
-                var ctor = dlgType.GetConstructor(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
-                    new[] { typeof(ICoreClientAPI), waypointLayer.GetType() }, null);
-
-                if (ctor != null)
-                {
-                    var dlgObj = ctor.Invoke(new object[] { capi, waypointLayer });
-                    if (dlgObj is GuiDialog dialog && dialog.TryOpen())
-                    {
-                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via direct ctor fallback");
-                        return true;
-                    }
-                }
-
-                // Fallback ctor scan when exact type lookup fails (proxy/subtype differences).
-                var ctors = dlgType.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                    .OrderBy(c => c.GetParameters().Length)
-                    .ToArray();
-
-                foreach (var c in ctors)
-                {
-                    var ps = c.GetParameters();
-                    if (ps.Length < 2) continue;
-
-                    object[] args = new object[ps.Length];
-                    bool ok = true;
-                    bool usedLayer = false;
-
-                    for (int i = 0; i < ps.Length; i++)
-                    {
-                        var pt = ps[i].ParameterType;
-                        if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
-                        else if (pt.IsInstanceOfType(waypointLayer)) { args[i] = waypointLayer; usedLayer = true; }
-                        else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
-                        else if (pt.IsValueType) args[i] = Activator.CreateInstance(pt);
-                        else args[i] = null;
-                    }
-
-                    if (!usedLayer || !ok) continue;
-
-                    try
-                    {
-                        var dlgObj = c.Invoke(args);
-                        if (dlgObj is GuiDialog dialog && dialog.TryOpen())
-                        {
-                            capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via scanned ctor fallback {0}", c);
-                            return true;
-                        }
-                    }
-                    catch { }
-                }
-            }
-            catch (Exception e)
-            {
-                capi?.Logger?.Debug("[WaypointBeacon] Ctor fallback failed: {0}", e);
-            }
-
             return false;
         }
 
@@ -1136,10 +1063,10 @@ public int MaxRenderDistance
                 .Where(m =>
                 {
                     string n = m.Name.ToLowerInvariant();
-                    bool waypointAdd = n.Contains("way") && n.Contains("point") && n.Contains("add");
-                    bool vanillaMarkerAdd = (t.FullName ?? "").StartsWith("Vintagestory", StringComparison.OrdinalIgnoreCase)
-                        && n.Contains("marker") && n.Contains("add");
-                    return waypointAdd || vanillaMarkerAdd;
+                    bool isVanillaType = (t.FullName ?? "").StartsWith("Vintagestory", StringComparison.OrdinalIgnoreCase);
+                    bool waypointAction = n.Contains("way") && n.Contains("point") && (n.Contains("add") || n.Contains("new") || n.Contains("create"));
+                    bool vanillaMarkerAction = isVanillaType && n.Contains("marker") && (n.Contains("add") || n.Contains("new") || n.Contains("create"));
+                    return waypointAction || vanillaMarkerAction;
                 })
                 .OrderBy(m => m.GetParameters().Length)
                 .ToArray();
