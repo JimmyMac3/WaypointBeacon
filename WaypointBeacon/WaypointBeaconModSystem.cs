@@ -727,15 +727,38 @@ public int MaxRenderDistance
                 var sel = capi?.World?.Player?.CurrentBlockSelection;
                 if (sel?.Position == null) return false;
 
-                x = sel.Position.X;
-                y = sel.Position.Y;
-                z = sel.Position.Z;
+                int rawX = sel.Position.X;
+                int rawY = sel.Position.Y;
+                int rawZ = sel.Position.Z;
+
+                int mapSizeX = capi?.World?.BlockAccessor?.MapSizeX ?? 0;
+                int mapSizeZ = capi?.World?.BlockAccessor?.MapSizeZ ?? 0;
+
+                x = NormalizeWrappedCoord(rawX, mapSizeX);
+                y = rawY;
+                z = NormalizeWrappedCoord(rawZ, mapSizeZ);
+
+                if (rawX != x || rawZ != z)
+                {
+                    capi?.Logger?.Notification("[WaypointBeacon] Add Waypoint (Direct): normalized look-pos raw={0},{1},{2} -> norm={3},{4},{5} (map={6}x{7})", rawX, rawY, rawZ, x, y, z, mapSizeX, mapSizeZ);
+                }
+
                 return true;
             }
             catch
             {
                 return false;
             }
+        }
+
+        private int NormalizeWrappedCoord(int value, int mapSize)
+        {
+            if (mapSize <= 0) return value;
+
+            int half = mapSize / 2;
+            if (value > half) return value - mapSize;
+            if (value < -half) return value + mapSize;
+            return value;
         }
 
         private void ApplyInitialAddWaypointPosition(GuiDialogAddWayPoint dlg, int x, int y, int z)
