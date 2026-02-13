@@ -674,8 +674,13 @@ public int MaxRenderDistance
 
         private bool TryOpenAddWaypointDialogDirect()
         {
-            // Vintage Story 1.21.6 fixed path: use the vanilla Add Waypoint dialog ctor directly
-            // with the live WaypointMapLayer instance.
+            // Preferred for VS 1.21.6: invoke the actual hotkey system action that vanilla uses.
+            if (TryInvokeSystemHotkeysAddWaypoint())
+            {
+                return true;
+            }
+
+            // Fallback: direct ctor path (opens dialog but may miss internal state in some environments).
             var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
             var wpLayer = mapManager?.MapLayers?.OfType<WaypointMapLayer>()?.FirstOrDefault();
 
@@ -703,6 +708,93 @@ public int MaxRenderDistance
                 capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint (Direct): fixed v1.21.6 ctor path threw: {0}", e);
                 return false;
             }
+        }
+
+
+        private bool TryInvokeSystemHotkeysAddWaypoint()
+        {
+            try
+            {
+                var loader = capi?.ModLoader;
+                if (loader == null) return false;
+
+                foreach (var sys in EnumerateLoaderObjects(loader))
+                {
+                    if (sys == null) continue;
+                    var t = sys.GetType();
+                    string tn = t.FullName ?? t.Name ?? "";
+                    if (tn.IndexOf("SystemHotkeys", StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+                    var methods = t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                        .Where(m =>
+                        {
+                            string n = m.Name.ToLowerInvariant();
+                            return n.Contains("add") && n.Contains("way") && n.Contains("point") && IsSafeAddWaypointMethod(m);
+                        })
+                        .OrderBy(m => m.GetParameters().Length)
+                        .ToArray();
+
+                    foreach (var m in methods)
+                    {
+                        if (!TryInvokeAddWaypointMethod(sys, m)) continue;
+                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via fixed v1.21.6 hotkey method: {0}.{1}", t.FullName, m.Name);
+                        return true;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] SystemHotkeys add-waypoint path failed: {0}", e);
+            }
+
+            return false;
+        }
+
+        private IEnumerable<object> EnumerateLoaderObjects(object loader)
+        {
+            var seen = new HashSet<object>();
+            foreach (string name in new[] { "systems", "Systems", "modsystems", "ModSystems", "clientSystems", "loadedSystems", "LoadedSystems" })
+            {
+                object val = TryGetMember(loader, name);
+                foreach (var obj in FlattenAny(val))
+                {
+                    if (obj != null && seen.Add(obj)) yield return obj;
+                }
+            }
+
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var t = loader.GetType();
+            foreach (var f in t.GetFields(flags))
+            {
+                if (!f.Name.ToLowerInvariant().Contains("system")) continue;
+                object val = null;
+                try { val = f.GetValue(loader); } catch { }
+                foreach (var obj in FlattenAny(val))
+                {
+                    if (obj != null && seen.Add(obj)) yield return obj;
+                }
+            }
+        }
+
+        private IEnumerable<object> FlattenAny(object val)
+        {
+            if (val == null) yield break;
+            if (val is System.Collections.IDictionary d)
+            {
+                foreach (System.Collections.DictionaryEntry de in d) if (de.Value != null) yield return de.Value;
+                yield break;
+            }
+            if (val is System.Collections.IEnumerable en && !(val is string))
+            {
+                foreach (var item in en)
+                {
+                    if (item == null) continue;
+                    object v = TryGetMember(item, "Value") ?? item;
+                    if (v != null) yield return v;
+                }
+                yield break;
+            }
+            yield return val;
         }
 
         private bool TryTriggerVanillaAddWaypointByCode()
