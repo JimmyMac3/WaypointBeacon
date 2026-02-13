@@ -674,34 +674,35 @@ public int MaxRenderDistance
 
         private bool TryOpenAddWaypointDialogDirect()
         {
+            // Vintage Story 1.21.6 fixed path: use the vanilla Add Waypoint dialog ctor directly
+            // with the live WaypointMapLayer instance.
             var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
-            object waypointLayer = GetWaypointMapLayerObject(mapManager);
+            var wpLayer = mapManager?.MapLayers?.OfType<WaypointMapLayer>()?.FirstOrDefault();
 
-            // Preferred: trigger vanilla Add Waypoint by code through input/hotkey manager.
-            if (TryTriggerVanillaAddWaypointByCode())
+            if (wpLayer == null)
             {
-                return true;
+                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint (Direct): WaypointMapLayer was null (v1.21.6 path)");
+                return false;
             }
 
-            // Secondary: forward to vanilla hotkey object/handler.
-            if (TryInvokeVanillaAddWaypointHotkey())
+            try
             {
-                return true;
-            }
+                var dlg = new GuiDialogAddWayPoint(capi, wpLayer);
+                bool opened = dlg.TryOpen();
+                if (opened)
+                {
+                    capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via fixed v1.21.6 ctor: GuiDialogAddWayPoint(ICoreClientAPI, WaypointMapLayer)");
+                    return true;
+                }
 
-            // Fallback 1: invoke known action methods on layer/map systems.
-            if (TryInvokeKnownAddWaypointAction(waypointLayer) || TryInvokeKnownAddWaypointAction(mapManager))
+                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint (Direct): fixed v1.21.6 ctor path returned TryOpen=false");
+                return false;
+            }
+            catch (Exception e)
             {
-                return true;
+                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint (Direct): fixed v1.21.6 ctor path threw: {0}", e);
+                return false;
             }
-
-            // Fallback 2: search add-waypoint methods on layer/map systems.
-            if (TryInvokeAddWaypointOpenMethod(waypointLayer) || TryInvokeAddWaypointOpenMethod(mapManager))
-            {
-                return true;
-            }
-
-            return false;
         }
 
         private bool TryTriggerVanillaAddWaypointByCode()
