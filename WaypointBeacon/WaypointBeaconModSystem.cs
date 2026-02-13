@@ -693,6 +693,12 @@ public int MaxRenderDistance
             try
             {
                 var dlg = new GuiDialogAddWayPoint(capi, wpLayer);
+
+                if (TryGetLookAtBlockPos(out int lx, out int ly, out int lz))
+                {
+                    ApplyInitialAddWaypointPosition(dlg, lx, ly, lz);
+                }
+
                 bool opened = dlg.TryOpen();
                 if (opened)
                 {
@@ -710,6 +716,92 @@ public int MaxRenderDistance
             }
         }
 
+
+
+        private bool TryGetLookAtBlockPos(out int x, out int y, out int z)
+        {
+            x = y = z = 0;
+
+            try
+            {
+                var sel = capi?.World?.Player?.CurrentBlockSelection;
+                if (sel?.Position == null) return false;
+
+                x = sel.Position.X;
+                y = sel.Position.Y;
+                z = sel.Position.Z;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void ApplyInitialAddWaypointPosition(GuiDialogAddWayPoint dlg, int x, int y, int z)
+        {
+            if (dlg == null) return;
+
+            try
+            {
+                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var dt = dlg.GetType();
+
+                bool applied = false;
+
+                // 1) Try direct XYZ members on dialog
+                applied |= TrySetIntMember(dlg, dt, flags, x, "x", "X", "posX", "targetX", "waypointX");
+                applied |= TrySetIntMember(dlg, dt, flags, y, "y", "Y", "posY", "targetY", "waypointY");
+                applied |= TrySetIntMember(dlg, dt, flags, z, "z", "Z", "posZ", "targetZ", "waypointZ");
+
+                // 2) Try nested position object members
+                foreach (string posName in new[] { "position", "Position", "pos", "Pos", "targetPos", "TargetPos", "waypointPos", "WaypointPos" })
+                {
+                    object posObj = TryGetMember(dlg, posName);
+                    if (posObj == null) continue;
+
+                    var pt = posObj.GetType();
+                    bool px = TrySetIntMember(posObj, pt, flags, x, "x", "X");
+                    bool py = TrySetIntMember(posObj, pt, flags, y, "y", "Y");
+                    bool pz = TrySetIntMember(posObj, pt, flags, z, "z", "Z");
+                    if (px || py || pz) applied = true;
+                }
+
+                capi?.Logger?.Notification("[WaypointBeacon] Add Waypoint (Direct): look-pos {0},{1},{2} applied={3}", x, y, z, applied);
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] Add Waypoint (Direct): failed applying look-pos: {0}", e);
+            }
+        }
+
+        private bool TrySetIntMember(object obj, Type t, BindingFlags flags, int value, params string[] names)
+        {
+            foreach (string name in names)
+            {
+                try
+                {
+                    var p = t.GetProperty(name, flags);
+                    if (p != null && p.CanWrite)
+                    {
+                        if (p.PropertyType == typeof(int)) { p.SetValue(obj, value); return true; }
+                        if (p.PropertyType == typeof(double)) { p.SetValue(obj, (double)value); return true; }
+                        if (p.PropertyType == typeof(float)) { p.SetValue(obj, (float)value); return true; }
+                    }
+
+                    var f = t.GetField(name, flags);
+                    if (f != null)
+                    {
+                        if (f.FieldType == typeof(int)) { f.SetValue(obj, value); return true; }
+                        if (f.FieldType == typeof(double)) { f.SetValue(obj, (double)value); return true; }
+                        if (f.FieldType == typeof(float)) { f.SetValue(obj, (float)value); return true; }
+                    }
+                }
+                catch { }
+            }
+
+            return false;
+        }
 
         private bool TryInvokeSystemHotkeysAddWaypoint()
         {
