@@ -648,9 +648,10 @@ public int MaxRenderDistance
         {
             try
             {
-                BlockPos target = capi.World.Player.CurrentBlockSelection?.Position
+                BlockPos rawTarget = capi.World.Player.CurrentBlockSelection?.Position
                     ?? capi.World.Player.Entity.Pos.AsBlockPos;
 
+                BlockPos target = NormalizeTargetBlockPos(rawTarget);
                 bool opened = TryCreateInstantWaypointAndOpenEdit(target);
                 if (!opened)
                 {
@@ -666,19 +667,40 @@ public int MaxRenderDistance
             }
         }
 
+        private BlockPos NormalizeTargetBlockPos(BlockPos target)
+        {
+            if (target == null) return new BlockPos(0, 0, 0);
+
+            int mapSizeX = capi?.World?.BlockAccessor?.MapSizeX ?? 0;
+            int mapSizeZ = capi?.World?.BlockAccessor?.MapSizeZ ?? 0;
+
+            int x = NormalizeWrappedCoord(target.X, mapSizeX);
+            int z = NormalizeWrappedCoord(target.Z, mapSizeZ);
+
+            return new BlockPos(x, target.Y, z);
+        }
+
         private bool TryCreateInstantWaypointAndOpenEdit(BlockPos target)
         {
             var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
             object waypointLayer = GetWaypointMapLayerObject(mapManager);
             if (waypointLayer == null) return false;
 
+            HashSet<string> beforeKeys = SnapshotWaypointKeys();
+
             object waypoint = CreateGenericWaypoint(target);
             if (waypoint == null) return false;
 
-            if (!TryAddWaypointToLayer(waypointLayer, waypoint)) return false;
+            if (!TryAddWaypointToLayer(waypointLayer, waypoint, out string addMethodName)) return false;
 
-            object latestWaypoint = FindWaypointNear(target.X + 0.5, target.Y + 0.5, target.Z + 0.5) ?? waypoint;
-            if (!TryOpenEditDialogForWaypoint(waypointLayer, latestWaypoint)) return false;
+            object createdWaypoint = FindNewWaypointBySnapshot(beforeKeys, target.X + 0.5, target.Y + 0.5, target.Z + 0.5);
+            if (createdWaypoint == null)
+            {
+                capi?.Logger?.Warning("[WaypointBeacon] Added waypoint via {0}, but could not identify a newly created persistent waypoint.", addMethodName ?? "unknown method");
+                return false;
+            }
+
+            if (!TryOpenEditDialogForWaypoint(waypointLayer, createdWaypoint)) return false;
 
             capi?.Logger?.Notification("[WaypointBeacon] Created waypoint and opened Edit dialog at {0},{1},{2}", target.X, target.Y, target.Z);
             return true;
@@ -716,8 +738,10 @@ public int MaxRenderDistance
             }
         }
 
-        private bool TryAddWaypointToLayer(object waypointLayer, object waypoint)
+        private bool TryAddWaypointToLayer(object waypointLayer, object waypoint, out string methodUsed)
         {
+            methodUsed = null;
+
             try
             {
                 var methods = waypointLayer.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
@@ -727,6 +751,7 @@ public int MaxRenderDistance
                         if (!n.Contains("waypoint")) return false;
                         if (!n.Contains("add") && !n.Contains("create")) return false;
                         if (n.StartsWith("oncmd")) return false;
+                        if (n.Contains("temporary") || n.Contains("temp")) return false;
                         return true;
                     })
                     .OrderBy(m => m.GetParameters().Length);
@@ -761,6 +786,8 @@ public int MaxRenderDistance
                     {
                         object ret = method.Invoke(waypointLayer, args);
                         if (ret is bool b && !b) continue;
+
+                        methodUsed = method.Name;
                         capi?.Logger?.Notification("[WaypointBeacon] Added waypoint using {0}.{1}", waypointLayer.GetType().Name, method.Name);
                         return true;
                     }
@@ -778,7 +805,21 @@ public int MaxRenderDistance
             return false;
         }
 
-        private object FindWaypointNear(double x, double y, double z)
+        private HashSet<string> SnapshotWaypointKeys()
+        {
+            var keys = new HashSet<string>();
+
+            foreach (var wp in EnumerateWaypoints())
+            {
+                if (!TryGetWaypointPos(wp, out double x, out double y, out double z)) continue;
+                string title = TryGetString(wp, "Title", "title", "Name", "name", "Text", "text") ?? string.Empty;
+                keys.Add(MakePinKey(x, y, z, title));
+            }
+
+            return keys;
+        }
+
+        private object FindNewWaypointBySnapshot(HashSet<string> beforeKeys, double x, double y, double z)
         {
             object nearest = null;
             double bestDistSq = double.MaxValue;
@@ -786,12 +827,15 @@ public int MaxRenderDistance
             foreach (var wp in EnumerateWaypoints())
             {
                 if (!TryGetWaypointPos(wp, out double wx, out double wy, out double wz)) continue;
+                string title = TryGetString(wp, "Title", "title", "Name", "name", "Text", "text") ?? string.Empty;
+                string key = MakePinKey(wx, wy, wz, title);
+
+                if (beforeKeys != null && beforeKeys.Contains(key)) continue;
 
                 double dx = wx - x;
                 double dy = wy - y;
                 double dz = wz - z;
                 double distSq = dx * dx + dy * dy + dz * dz;
-                if (distSq > 4.0) continue; // within 2 blocks
 
                 if (distSq < bestDistSq)
                 {
