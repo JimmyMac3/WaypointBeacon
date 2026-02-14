@@ -58,7 +58,6 @@ namespace WaypointBeacon
         private GuiDialogBeaconManagerSettings beaconManagerDialog;
         private bool beaconManagerIsOpen;
         private long tickListenerId;
-        private long lastAddWaypointHotkeyTicks;
         private BeaconLabelRenderer labelRenderer;
         private BeaconBeamRenderer beamRenderer;
 
@@ -648,46 +647,39 @@ public int MaxRenderDistance
         {
             try
             {
-                BlockPos target = capi?.World?.Player?.CurrentBlockSelection?.Position
-                    ?? capi?.World?.Player?.Entity?.Pos?.AsBlockPos
-                    ?? new BlockPos(0, 0, 0);
+                // 1. Get the block you're pointing at (or your feet as fallback)
+                BlockPos target = capi.World.Player.CurrentBlockSelection?.Position
+                               ?? capi.World.Player.Entity.Pos.AsBlockPos;
 
-                object dlgObj = null;
-                try
-                {
-                    dlgObj = Activator.CreateInstance(typeof(GuiDialogAddWayPoint), new object[] { capi });
-                }
-                catch
-                {
-                    var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
-                    var wpLayer = mapManager?.MapLayers?.OfType<WaypointMapLayer>()?.FirstOrDefault();
-                    if (wpLayer == null)
-                    {
-                        capi?.Logger?.Warning("[WaypointBeacon] Failed to open Add Beacon dialog: WaypointMapLayer not found.");
-                        return false;
-                    }
+                // 2. Get the WaypointMapLayer (same one the map uses)
+                var mapManager = capi.ModLoader.GetModSystem<WorldMapManager>();
+                var layer = mapManager.MapLayers
+                    .FirstOrDefault(l => l is WaypointMapLayer) as WaypointMapLayer;
 
-                    dlgObj = Activator.CreateInstance(typeof(GuiDialogAddWayPoint), new object[] { capi, wpLayer });
-                }
-
-                if (!(dlgObj is GuiDialogAddWayPoint dlg))
+                if (layer == null)
                 {
-                    capi?.Logger?.Warning("[WaypointBeacon] Failed to create GuiDialogAddWayPoint instance.");
+                    capi.Logger.Warning("[WaypointBeacon] Could not find WaypointMapLayer");
                     return false;
                 }
 
+                // 3. Create the dialog exactly like vanilla does on right-click
+                var dlg = new GuiDialogAddWayPoint(capi, layer);
+
+                // 4. Seed the position (center of the block) — this is the critical part
                 TrySeedCreatingWaypointPosition(dlg, target);
 
+                // 5. Open it — your existing Harmony patch will add the Beacon switch automatically
                 bool opened = dlg.TryOpen();
                 if (opened)
                 {
-                    capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via OnAddBeaconWaypointHotkey at {0},{1},{2}", target.X, target.Y, target.Z);
+                    capi.Logger.Notification("[WaypointBeacon] Add Beacon dialog opened at {0},{1},{2}",
+                        target.X, target.Y, target.Z);
                 }
                 return opened;
             }
             catch (Exception e)
             {
-                capi?.Logger?.Error("[WaypointBeacon] Failed to open Add Beacon dialog: {0}", e);
+                capi.Logger.Error("[WaypointBeacon] Failed to open Add Beacon dialog: {0}", e);
                 return false;
             }
         }
@@ -696,31 +688,58 @@ public int MaxRenderDistance
         {
             try
             {
-                var flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
-                var dt = dlg.GetType();
+                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var dlgType = dlg.GetType();
 
-                var wpField = dt.GetField("creatingWaypoint", flags) ?? dt.GetField("CreatingWaypoint", flags);
-                object wpObj = wpField?.GetValue(dlg);
-                if (wpObj == null) return;
+                string[] possibleWaypointFields = {
+            "creatingWaypoint", "CreatingWaypoint",
+            "waypoint", "Waypoint",
+            "curWaypoint", "CurWaypoint",
+            "selectedWaypoint", "SelectedWaypoint",
+            "editWaypoint", "EditWaypoint"
+                };
 
-                Vec3d pos = new Vec3d(target.X + 0.5, target.Y + 0.5, target.Z + 0.5);
+                Vec3d centerPos = new Vec3d(target.X + 0.5, target.Y + 0.5, target.Z + 0.5);
 
-                var wpt = wpObj.GetType();
-                var posProp = wpt.GetProperty("Position", flags);
-                if (posProp != null && posProp.CanWrite)
+                foreach (string fieldName in possibleWaypointFields)
                 {
-                    if (posProp.PropertyType == typeof(Vec3d)) { posProp.SetValue(wpObj, pos); return; }
+                    var wpField = dlgType.GetField(fieldName, flags);
+                    if (wpField == null) continue;
+
+                    object wpObj = wpField.GetValue(dlg);
+                    if (wpObj == null) continue;
+
+                    // ── Set the Position on the waypoint object ──
+                    var wpType = wpObj.GetType();
+
+                    // Try property first (most common)
+                    var posProp = wpType.GetProperty("Position", flags);
+                    if (posProp != null && posProp.CanWrite)
+                    {
+                        posProp.SetValue(wpObj, centerPos);
+                        capi.Logger.Notification("[WaypointBeacon] Seeded position using property 'Position' on {0}", fieldName);
+                        return;
+                    }
+
+                    // Try field (some versions use a field instead)
+                    var posField = wpType.GetField("Position", flags)
+                                ?? wpType.GetField("position", flags)
+                                ?? wpType.GetField("pos", flags)
+                                ?? wpType.GetField("Pos", flags);
+
+                    if (posField != null)
+                    {
+                        posField.SetValue(wpObj, centerPos);
+                        capi.Logger.Notification("[WaypointBeacon] Seeded position using field 'Position' on {0}", fieldName);
+                        return;
+                    }
                 }
 
-                var posField = wpt.GetField("Position", flags) ?? wpt.GetField("position", flags);
-                if (posField != null)
-                {
-                    if (posField.FieldType == typeof(Vec3d)) { posField.SetValue(wpObj, pos); return; }
-                }
+                capi.Logger.Warning("[WaypointBeacon] Could not find a waypoint field/property to seed position");
             }
             catch (Exception e)
             {
-                capi?.Logger?.Debug("[WaypointBeacon] Failed to seed creatingWaypoint position: {0}", e);
+                capi.Logger.Debug("[WaypointBeacon] Seeding position failed: {0}", e);
             }
         }
 
