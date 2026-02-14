@@ -595,6 +595,7 @@ public int MaxRenderDistance
 
             capi.Input.RegisterHotKey("addbeaconwaypoint", "Add Beacon at Pointed Block", GlKeys.B, HotkeyType.GUIOrOtherControls);
             capi.Input.SetHotKeyHandler("addbeaconwaypoint", OnAddBeaconWaypointHotkey);
+            capi.Logger.Warning("[WaypointBeacon] Registered B hotkey: addbeaconwaypoint");
 
             // Patch vanilla waypoint dialog to show a Beacon toggle companion dialog (1.21.6)
             WaypointDialogBeaconPatch.TryPatch(capi, this);
@@ -648,6 +649,8 @@ public int MaxRenderDistance
         {
             try
             {
+                capi?.Logger?.Warning("[WaypointBeacon] B hotkey handler triggered");
+
                 BlockPos rawTarget = capi.World.Player.CurrentBlockSelection?.Position
                     ?? capi.World.Player.Entity.Pos.AsBlockPos;
 
@@ -691,6 +694,17 @@ public int MaxRenderDistance
             object waypoint = CreateGenericWaypoint(target);
             if (waypoint == null) return false;
 
+            if (TryAddWaypointByListMutation(waypointLayer, waypoint))
+            {
+                if (TryOpenEditDialogForWaypoint(waypointLayer, waypoint))
+                {
+                    capi?.Logger?.Notification("[WaypointBeacon] Created waypoint via ownWaypoints list and opened Edit dialog at {0},{1},{2}", target.X, target.Y, target.Z);
+                    return true;
+                }
+
+                capi?.Logger?.Warning("[WaypointBeacon] Waypoint created via ownWaypoints list but edit dialog could not be opened.");
+            }
+
             if (!TryAddWaypointToLayer(waypointLayer, waypoint, out string addMethodName)) return false;
 
             object createdWaypoint = FindNewWaypointBySnapshot(beforeKeys, target.X + 0.5, target.Y + 0.5, target.Z + 0.5);
@@ -704,6 +718,48 @@ public int MaxRenderDistance
 
             capi?.Logger?.Notification("[WaypointBeacon] Created waypoint and opened Edit dialog at {0},{1},{2}", target.X, target.Y, target.Z);
             return true;
+        }
+
+        private bool TryAddWaypointByListMutation(object waypointLayer, object waypoint)
+        {
+            try
+            {
+                object listObj =
+                    TryGetMember(waypointLayer, "ownWaypoints") ??
+                    TryGetMember(waypointLayer, "OwnWaypoints") ??
+                    TryGetMember(waypointLayer, "waypoints") ??
+                    TryGetMember(waypointLayer, "Waypoints");
+
+                if (!(listObj is IList list)) return false;
+
+                list.Add(waypoint);
+
+                TryInvokeParameterlessMethod(waypointLayer, "RebuildMapComponents");
+                TryInvokeParameterlessMethod(waypointLayer, "RebuildComponents");
+                TryInvokeParameterlessMethod(waypointLayer, "RebuildMap");
+                TryInvokeParameterlessMethod(waypointLayer, "RegenWaypoints");
+                TryInvokeParameterlessMethod(waypointLayer, "MarkDirty");
+
+                capi?.Logger?.Notification("[WaypointBeacon] Added waypoint by direct list mutation on {0}", waypointLayer.GetType().Name);
+                return true;
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] Failed direct list waypoint add: {0}", e);
+                return false;
+            }
+        }
+
+        private void TryInvokeParameterlessMethod(object target, string methodName)
+        {
+            if (target == null || string.IsNullOrEmpty(methodName)) return;
+
+            try
+            {
+                var method = target.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
+                method?.Invoke(target, null);
+            }
+            catch { }
         }
 
         private object CreateGenericWaypoint(BlockPos target)
