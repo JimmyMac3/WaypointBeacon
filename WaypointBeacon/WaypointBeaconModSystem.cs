@@ -648,27 +648,299 @@ public int MaxRenderDistance
         {
             try
             {
-                long nowTicks = DateTime.UtcNow.Ticks;
-                if (nowTicks - lastAddWaypointHotkeyTicks < TimeSpan.FromMilliseconds(175).Ticks)
-                {
-                    return true;
-                }
-                lastAddWaypointHotkeyTicks = nowTicks;
+                BlockPos target = capi.World.Player.CurrentBlockSelection?.Position
+                    ?? capi.World.Player.Entity.Pos.AsBlockPos;
 
-                capi?.Logger?.Notification("[WaypointBeacon] Add Waypoint (Direct) hotkey pressed ({0})", comb?.ToString() ?? "unknown");
-
-                if (TryOpenAddWaypointDialogDirect())
+                bool opened = TryCreateInstantWaypointAndOpenEdit(target);
+                if (!opened)
                 {
-                    return true;
+                    capi?.Logger?.Warning("[WaypointBeacon] Add Beacon hotkey failed to create/edit waypoint at {0},{1},{2}", target.X, target.Y, target.Z);
                 }
 
-                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint (Direct) hotkey was handled but no compatible vanilla open-dialog path was found.");
-                return false;
+                return opened;
             }
             catch (Exception e)
             {
                 capi?.Logger?.Error("[WaypointBeacon] Failed to open Add Beacon dialog: {0}", e);
                 return false;
+            }
+        }
+
+        private bool TryCreateInstantWaypointAndOpenEdit(BlockPos target)
+        {
+            var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+            object waypointLayer = GetWaypointMapLayerObject(mapManager);
+            if (waypointLayer == null) return false;
+
+            object waypoint = CreateGenericWaypoint(target);
+            if (waypoint == null) return false;
+
+            if (!TryAddWaypointToLayer(waypointLayer, waypoint)) return false;
+
+            object latestWaypoint = FindWaypointNear(target.X + 0.5, target.Y + 0.5, target.Z + 0.5) ?? waypoint;
+            if (!TryOpenEditDialogForWaypoint(waypointLayer, latestWaypoint)) return false;
+
+            capi?.Logger?.Notification("[WaypointBeacon] Created waypoint and opened Edit dialog at {0},{1},{2}", target.X, target.Y, target.Z);
+            return true;
+        }
+
+        private object CreateGenericWaypoint(BlockPos target)
+        {
+            try
+            {
+                var wp = new Waypoint();
+                double px = target.X + 0.5;
+                double py = target.Y + 0.5;
+                double pz = target.Z + 0.5;
+
+                TrySetMemberValue(wp, "Position", new Vec3d(px, py, pz));
+                TrySetMemberValue(wp, "Pos", new Vec3d(px, py, pz));
+                TrySetMemberValue(wp, "X", px);
+                TrySetMemberValue(wp, "Y", py);
+                TrySetMemberValue(wp, "Z", pz);
+
+                TrySetMemberValue(wp, "Title", "New Beacon");
+                TrySetMemberValue(wp, "Text", "New Beacon");
+                TrySetMemberValue(wp, "Name", "New Beacon");
+
+                TrySetMemberValue(wp, "Color", "#ffd700");
+                TrySetMemberValue(wp, "color", "#ffd700");
+                TrySetMemberValue(wp, "Icon", "circle");
+                TrySetMemberValue(wp, "Symbol", "circle");
+                return wp;
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Warning("[WaypointBeacon] Failed to create generic waypoint: {0}", e);
+                return null;
+            }
+        }
+
+        private bool TryAddWaypointToLayer(object waypointLayer, object waypoint)
+        {
+            try
+            {
+                var methods = waypointLayer.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .Where(m =>
+                    {
+                        string n = (m.Name ?? string.Empty).ToLowerInvariant();
+                        if (!n.Contains("waypoint")) return false;
+                        if (!n.Contains("add") && !n.Contains("create")) return false;
+                        if (n.StartsWith("oncmd")) return false;
+                        return true;
+                    })
+                    .OrderBy(m => m.GetParameters().Length);
+
+                foreach (var method in methods)
+                {
+                    var ps = method.GetParameters();
+                    if (!ps.Any(p => p.ParameterType.IsInstanceOfType(waypoint))) continue;
+                    if (ps.Any(p => typeof(IServerPlayer).IsAssignableFrom(p.ParameterType))) continue;
+
+                    object[] args = new object[ps.Length];
+                    bool badArgs = false;
+
+                    for (int i = 0; i < ps.Length; i++)
+                    {
+                        Type pt = ps[i].ParameterType;
+
+                        if (pt.IsInstanceOfType(waypoint)) args[i] = waypoint;
+                        else if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
+                        else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
+                        else if (typeof(IPlayer).IsAssignableFrom(pt)) args[i] = capi?.World?.Player;
+                        else if (typeof(WorldMapManager).IsAssignableFrom(pt)) args[i] = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+                        else if (typeof(IWorldAccessor).IsAssignableFrom(pt)) args[i] = capi?.World;
+                        else if (pt.IsValueType) args[i] = Activator.CreateInstance(pt);
+                        else if (!pt.IsClass) { badArgs = true; break; }
+                        else args[i] = null;
+                    }
+
+                    if (badArgs) continue;
+
+                    try
+                    {
+                        object ret = method.Invoke(waypointLayer, args);
+                        if (ret is bool b && !b) continue;
+                        capi?.Logger?.Notification("[WaypointBeacon] Added waypoint using {0}.{1}", waypointLayer.GetType().Name, method.Name);
+                        return true;
+                    }
+                    catch (Exception invokeEx)
+                    {
+                        capi?.Logger?.Debug("[WaypointBeacon] Add waypoint invoke failed on {0}.{1}: {2}", waypointLayer.GetType().Name, method.Name, invokeEx.InnerException ?? invokeEx);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] Failed scanning layer add-waypoint methods: {0}", e);
+            }
+
+            return false;
+        }
+
+        private object FindWaypointNear(double x, double y, double z)
+        {
+            object nearest = null;
+            double bestDistSq = double.MaxValue;
+
+            foreach (var wp in EnumerateWaypoints())
+            {
+                if (!TryGetWaypointPos(wp, out double wx, out double wy, out double wz)) continue;
+
+                double dx = wx - x;
+                double dy = wy - y;
+                double dz = wz - z;
+                double distSq = dx * dx + dy * dy + dz * dz;
+                if (distSq > 4.0) continue; // within 2 blocks
+
+                if (distSq < bestDistSq)
+                {
+                    bestDistSq = distSq;
+                    nearest = wp;
+                }
+            }
+
+            return nearest;
+        }
+
+        private bool TryOpenEditDialogForWaypoint(object waypointLayer, object waypoint)
+        {
+            if (waypoint == null) return false;
+
+            try
+            {
+                var editMethods = waypointLayer.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .Where(m =>
+                    {
+                        string n = (m.Name ?? string.Empty).ToLowerInvariant();
+                        return n.Contains("edit") && n.Contains("waypoint");
+                    })
+                    .OrderBy(m => m.GetParameters().Length);
+
+                foreach (var method in editMethods)
+                {
+                    var ps = method.GetParameters();
+                    if (!ps.Any(p => p.ParameterType.IsInstanceOfType(waypoint))) continue;
+
+                    var args = new object[ps.Length];
+                    for (int i = 0; i < ps.Length; i++)
+                    {
+                        Type pt = ps[i].ParameterType;
+
+                        if (pt.IsInstanceOfType(waypoint)) args[i] = waypoint;
+                        else if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
+                        else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
+                        else if (typeof(IPlayer).IsAssignableFrom(pt)) args[i] = capi?.World?.Player;
+                        else if (pt.IsValueType) args[i] = Activator.CreateInstance(pt);
+                        else args[i] = null;
+                    }
+
+                    try
+                    {
+                        object ret = method.Invoke(waypointLayer, args);
+                        if (ret is bool b && !b) continue;
+                        capi?.Logger?.Notification("[WaypointBeacon] Opened edit dialog using {0}.{1}", waypointLayer.GetType().Name, method.Name);
+                        return true;
+                    }
+                    catch (Exception invokeEx)
+                    {
+                        capi?.Logger?.Debug("[WaypointBeacon] Edit waypoint invoke failed on {0}.{1}: {2}", waypointLayer.GetType().Name, method.Name, invokeEx.InnerException ?? invokeEx);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] Failed to locate edit-waypoint method: {0}", e);
+            }
+
+            try
+            {
+                var ctor = typeof(GuiDialogEditWayPoint).GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .OrderBy(c => c.GetParameters().Length)
+                    .FirstOrDefault();
+                if (ctor == null) return false;
+
+                var ps = ctor.GetParameters();
+                object[] args = new object[ps.Length];
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    Type pt = ps[i].ParameterType;
+                    if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (pt.IsInstanceOfType(waypointLayer)) args[i] = waypointLayer;
+                    else if (pt.IsInstanceOfType(waypoint)) args[i] = waypoint;
+                    else if (pt.IsValueType) args[i] = Activator.CreateInstance(pt);
+                    else args[i] = null;
+                }
+
+                var dlg = ctor.Invoke(args) as GuiDialogEditWayPoint;
+                return dlg?.TryOpen() == true;
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] Failed ctor fallback for edit dialog: {0}", e);
+                return false;
+            }
+        }
+
+        private bool TrySetMemberValue(object obj, string memberName, object value)
+        {
+            if (obj == null || string.IsNullOrEmpty(memberName)) return false;
+
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            Type t = obj.GetType();
+
+            try
+            {
+                var prop = t.GetProperty(memberName, flags);
+                if (prop != null && prop.CanWrite)
+                {
+                    object converted = ConvertValueForType(value, prop.PropertyType);
+                    if (converted != null || !prop.PropertyType.IsValueType)
+                    {
+                        prop.SetValue(obj, converted);
+                        return true;
+                    }
+                }
+
+                var field = t.GetField(memberName, flags);
+                if (field != null)
+                {
+                    object converted = ConvertValueForType(value, field.FieldType);
+                    if (converted != null || !field.FieldType.IsValueType)
+                    {
+                        field.SetValue(obj, converted);
+                        return true;
+                    }
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
+        private object ConvertValueForType(object value, Type targetType)
+        {
+            if (targetType == null) return value;
+            if (value == null) return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
+
+            if (targetType.IsInstanceOfType(value)) return value;
+
+            try
+            {
+                if (targetType.IsEnum)
+                {
+                    if (value is string s) return Enum.Parse(targetType, s, true);
+                    return Enum.ToObject(targetType, value);
+                }
+
+                if (targetType == typeof(string)) return value.ToString();
+                if (targetType == typeof(Vec3d) && value is BlockPos bp) return new Vec3d(bp.X + 0.5, bp.Y + 0.5, bp.Z + 0.5);
+
+                return Convert.ChangeType(value, targetType);
+            }
+            catch
+            {
+                return null;
             }
         }
 
@@ -681,22 +953,31 @@ public int MaxRenderDistance
 
                 var wpField = dt.GetField("creatingWaypoint", flags) ?? dt.GetField("CreatingWaypoint", flags);
                 object wpObj = wpField?.GetValue(dlg);
-                if (wpObj == null) return;
 
                 Vec3d pos = new Vec3d(target.X + 0.5, target.Y + 0.5, target.Z + 0.5);
 
-                var wpt = wpObj.GetType();
-                var posProp = wpt.GetProperty("Position", flags);
-                if (posProp != null && posProp.CanWrite)
+                if (wpObj != null)
                 {
-                    if (posProp.PropertyType == typeof(Vec3d)) { posProp.SetValue(wpObj, pos); return; }
+                    var wpt = wpObj.GetType();
+                    var posProp = wpt.GetProperty("Position", flags);
+                    if (posProp != null && posProp.CanWrite && posProp.PropertyType == typeof(Vec3d))
+                    {
+                        posProp.SetValue(wpObj, pos);
+                        return;
+                    }
+
+                    var posField = wpt.GetField("Position", flags) ?? wpt.GetField("position", flags);
+                    if (posField != null && posField.FieldType == typeof(Vec3d))
+                    {
+                        posField.SetValue(wpObj, pos);
+                        return;
+                    }
                 }
 
-                var posField = wpt.GetField("Position", flags) ?? wpt.GetField("position", flags);
-                if (posField != null)
-                {
-                    if (posField.FieldType == typeof(Vec3d)) { posField.SetValue(wpObj, pos); return; }
-                }
+                // Fallback: dialog-level position members if creatingWaypoint wasn't initialized yet.
+                TrySetIntMember(dlg, dt, flags, target.X, "x", "X", "posX", "targetX", "waypointX");
+                TrySetIntMember(dlg, dt, flags, target.Y, "y", "Y", "posY", "targetY", "waypointY");
+                TrySetIntMember(dlg, dt, flags, target.Z, "z", "Z", "posZ", "targetZ", "waypointZ");
             }
             catch (Exception e)
             {
