@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="MapMarkerNetwork.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="VintagestoryAPI">
       <HintPath>$(VINTAGE_STORY)/VintagestoryAPI.dll</HintPath>
       <Private>false</Private>
@@ -63,8 +67,17 @@
   </Content>
 </ItemGroup>
 
-<Target Name="PostBuild" AfterTargets="PostBuildEvent">
-  <Exec Command="set MODDIR=%25APPDATA%25\VintagestoryData\Mods\WaypointBeacon&#xD;&#xA;if not exist &quot;%25MODDIR%25&quot; mkdir &quot;%25MODDIR%25&quot;&#xD;&#xA;xcopy /Y /I /E &quot;$(TargetDir)*&quot; &quot;%25MODDIR%25\&quot;&#xD;&#xA;" />
+<Target Name="PostBuildDeployToModsFolder" AfterTargets="Build">
+  <PropertyGroup>
+    <ModDeployDir>$(APPDATA)\VintagestoryData\Mods\WaypointBeacon\</ModDeployDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <BuiltFiles Include="$(TargetDir)**\*" />
+  </ItemGroup>
+
+  <MakeDir Directories="$(ModDeployDir)" />
+  <Copy SourceFiles="@(BuiltFiles)" DestinationFiles="@(BuiltFiles->'$(ModDeployDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(BuiltFiles)' != ''" />
 </Target>
 
 <PropertyGroup>
