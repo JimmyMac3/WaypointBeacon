@@ -706,49 +706,15 @@ public int MaxRenderDistance
 
         private bool TryOpenAddWaypointDialogDirect()
         {
-            // Preferred for VS 1.21.6: invoke the actual hotkey system action that vanilla uses.
+            // Preferred for VS 1.21.6: call SystemHotkeys add-waypoint entrypoint.
             if (TryInvokeSystemHotkeysAddWaypoint())
             {
                 return true;
             }
 
-            // Fallback: direct ctor path (opens dialog but may miss internal state in some environments).
-            var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
-            var wpLayer = mapManager?.MapLayers?.OfType<WaypointMapLayer>()?.FirstOrDefault();
-
-            if (wpLayer == null)
-            {
-                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint (Direct): WaypointMapLayer was null (v1.21.6 path)");
-                return false;
-            }
-
-            try
-            {
-                var dlg = new GuiDialogAddWayPoint(capi, wpLayer);
-
-                if (TryGetLookAtBlockPos(out int lx, out int ly, out int lz))
-                {
-                    ApplyInitialAddWaypointPosition(dlg, lx, ly, lz);
-                }
-
-                bool opened = dlg.TryOpen();
-                if (opened)
-                {
-                    capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via fixed v1.21.6 ctor: GuiDialogAddWayPoint(ICoreClientAPI, WaypointMapLayer)");
-                    return true;
-                }
-
-                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint (Direct): fixed v1.21.6 ctor path returned TryOpen=false");
-                return false;
-            }
-            catch (Exception e)
-            {
-                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint (Direct): fixed v1.21.6 ctor path threw: {0}", e);
-                return false;
-            }
+            // No ctor fallback here: ctor-opened dialogs were causing save crashes.
+            return false;
         }
-
-
 
         private bool TryGetLookAtBlockPos(out int x, out int y, out int z)
         {
@@ -865,6 +831,14 @@ public int MaxRenderDistance
                 var loader = capi?.ModLoader;
                 if (loader == null) return false;
 
+                // First try exact type lookup for VS 1.21.6
+                object sysHotkeys = ResolveSystemHotkeysInstance(loader);
+                if (sysHotkeys != null && TryInvokeKnownSystemHotkeysMethods(sysHotkeys))
+                {
+                    return true;
+                }
+
+                // Fallback: scan loader objects for SystemHotkeys-like systems
                 foreach (var sys in EnumerateLoaderObjects(loader))
                 {
                     if (sys == null) continue;
@@ -872,19 +846,8 @@ public int MaxRenderDistance
                     string tn = t.FullName ?? t.Name ?? "";
                     if (tn.IndexOf("SystemHotkeys", StringComparison.OrdinalIgnoreCase) < 0) continue;
 
-                    var methods = t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                        .Where(m =>
-                        {
-                            string n = m.Name.ToLowerInvariant();
-                            return n.Contains("add") && n.Contains("way") && n.Contains("point") && IsSafeAddWaypointMethod(m);
-                        })
-                        .OrderBy(m => m.GetParameters().Length)
-                        .ToArray();
-
-                    foreach (var m in methods)
+                    if (TryInvokeKnownSystemHotkeysMethods(sys))
                     {
-                        if (!TryInvokeAddWaypointMethod(sys, m)) continue;
-                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via fixed v1.21.6 hotkey method: {0}.{1}", t.FullName, m.Name);
                         return true;
                     }
                 }
@@ -892,6 +855,61 @@ public int MaxRenderDistance
             catch (Exception e)
             {
                 capi?.Logger?.Debug("[WaypointBeacon] SystemHotkeys add-waypoint path failed: {0}", e);
+            }
+
+            return false;
+        }
+
+        private object ResolveSystemHotkeysInstance(object loader)
+        {
+            try
+            {
+                Type sysType = null;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    sysType = asm.GetType("Vintagestory.Client.SystemHotkeys", false, false);
+                    if (sysType != null) break;
+                }
+                if (sysType == null) return null;
+
+                var m = loader.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .FirstOrDefault(mi => mi.Name == "GetModSystem"
+                        && mi.GetParameters().Length == 1
+                        && mi.GetParameters()[0].ParameterType == typeof(Type));
+                if (m == null) return null;
+
+                return m.Invoke(loader, new object[] { sysType });
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private bool TryInvokeKnownSystemHotkeysMethods(object sys)
+        {
+            var t = sys.GetType();
+            var names = new[]
+            {
+                "OnAddWaypoint", "OnAddWayPoint", "AddWaypoint", "AddWayPoint",
+                "OnHotkeyAddWaypoint", "OnHotKeyAddWaypoint"
+            };
+
+            foreach (string n in names)
+            {
+                var methods = t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .Where(m => string.Equals(m.Name, n, StringComparison.OrdinalIgnoreCase))
+                    .Where(IsSafeAddWaypointMethod)
+                    .OrderBy(m => m.GetParameters().Length)
+                    .ToArray();
+
+                foreach (var m in methods)
+                {
+                    if (!TryInvokeAddWaypointMethod(sys, m)) continue;
+
+                    capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via fixed v1.21.6 hotkey method: {0}.{1}", t.FullName, m.Name);
+                    return true;
+                }
             }
 
             return false;
