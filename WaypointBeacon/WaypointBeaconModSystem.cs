@@ -592,6 +592,9 @@ public int MaxRenderDistance
             capi.Input.RegisterHotKey("waypointbeacon-togglebeacons", "Beacon Manager", GlKeys.K, HotkeyType.GUIOrOtherControls);
             capi.Input.SetHotKeyHandler("waypointbeacon-togglebeacons", OnToggleBeacons);
 
+            capi.Input.RegisterHotKey("addbeaconwaypoint", "Add Beacon at Pointed Block", GlKeys.B, HotkeyType.GUIOrOtherControls);
+            capi.Input.SetHotKeyHandler("addbeaconwaypoint", OnAddBeaconWaypointHotkey);
+
             // Patch vanilla waypoint dialog to show a Beacon toggle companion dialog (1.21.6)
             WaypointDialogBeaconPatch.TryPatch(capi, this);
 
@@ -638,10 +641,757 @@ public int MaxRenderDistance
 
         }
 
+
+
+        private bool OnAddBeaconWaypointHotkey(KeyCombination comb)
+        {
+            try
+            {
+                // 1. Get the block you're pointing at (or your feet as fallback)
+                BlockPos target = capi.World.Player.CurrentBlockSelection?.Position
+                               ?? capi.World.Player.Entity.Pos.AsBlockPos;
+
+                // 2. Get the WaypointMapLayer (same one the map uses)
+                var mapManager = capi.ModLoader.GetModSystem<WorldMapManager>();
+                var layer = mapManager.MapLayers
+                    .FirstOrDefault(l => l is WaypointMapLayer) as WaypointMapLayer;
+
+                if (layer == null)
+                {
+                    capi.Logger.Warning("[WaypointBeacon] Could not find WaypointMapLayer");
+                    return false;
+                }
+
+                // 3. Create the dialog exactly like vanilla does on right-click
+                var dlg = new GuiDialogAddWayPoint(capi, layer);
+
+                // 4. Seed the position (center of the block) — this is the critical part
+                TrySeedCreatingWaypointPosition(dlg, target);
+
+                // 5. Open it — your existing Harmony patch will add the Beacon switch automatically
+                bool opened = dlg.TryOpen();
+                if (opened)
+                {
+                    capi.Logger.Notification("[WaypointBeacon] Add Beacon dialog opened at {0},{1},{2}",
+                        target.X, target.Y, target.Z);
+                }
+                return opened;
+            }
+            catch (Exception e)
+            {
+                capi.Logger.Error("[WaypointBeacon] Failed to open Add Beacon dialog: {0}", e);
+                return false;
+            }
+        }
+
+        private void TrySeedCreatingWaypointPosition(GuiDialogAddWayPoint dlg, BlockPos target)
+        {
+            try
+            {
+                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var dlgType = dlg.GetType();
+
+                string[] possibleWaypointFields = {
+            "creatingWaypoint", "CreatingWaypoint",
+            "waypoint", "Waypoint",
+            "curWaypoint", "CurWaypoint",
+            "selectedWaypoint", "SelectedWaypoint",
+            "editWaypoint", "EditWaypoint"
+                };
+
+                Vec3d centerPos = new Vec3d(target.X + 0.5, target.Y + 0.5, target.Z + 0.5);
+
+                foreach (string fieldName in possibleWaypointFields)
+                {
+                    var wpField = dlgType.GetField(fieldName, flags);
+                    if (wpField == null) continue;
+
+                    object wpObj = wpField.GetValue(dlg);
+                    if (wpObj == null) continue;
+
+                    // ── Set the Position on the waypoint object ──
+                    var wpType = wpObj.GetType();
+
+                    // Try property first (most common)
+                    var posProp = wpType.GetProperty("Position", flags);
+                    if (posProp != null && posProp.CanWrite)
+                    {
+                        posProp.SetValue(wpObj, centerPos);
+                        capi.Logger.Notification("[WaypointBeacon] Seeded position using property 'Position' on {0}", fieldName);
+                        return;
+                    }
+
+                    // Try field (some versions use a field instead)
+                    var posField = wpType.GetField("Position", flags)
+                                ?? wpType.GetField("position", flags)
+                                ?? wpType.GetField("pos", flags)
+                                ?? wpType.GetField("Pos", flags);
+
+                    if (posField != null)
+                    {
+                        posField.SetValue(wpObj, centerPos);
+                        capi.Logger.Notification("[WaypointBeacon] Seeded position using field 'Position' on {0}", fieldName);
+                        return;
+                    }
+                }
+
+                capi.Logger.Warning("[WaypointBeacon] Could not find a waypoint field/property to seed position");
+            }
+            catch (Exception e)
+            {
+                capi.Logger.Debug("[WaypointBeacon] Seeding position failed: {0}", e);
+            }
+        }
+
+        private bool TryOpenAddWaypointDialogDirect()
+        {
+            // Preferred for VS 1.21.6: invoke the actual hotkey system action that vanilla uses.
+            if (TryInvokeSystemHotkeysAddWaypoint())
+            {
+                return true;
+            }
+
+            // Fallback: direct ctor path (opens dialog but may miss internal state in some environments).
+            var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+            var wpLayer = mapManager?.MapLayers?.OfType<WaypointMapLayer>()?.FirstOrDefault();
+
+            if (wpLayer == null)
+            {
+                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint (Direct): WaypointMapLayer was null (v1.21.6 path)");
+                return false;
+            }
+
+            try
+            {
+                var dlg = new GuiDialogAddWayPoint(capi, wpLayer);
+
+                if (TryGetLookAtBlockPos(out int lx, out int ly, out int lz))
+                {
+                    ApplyInitialAddWaypointPosition(dlg, lx, ly, lz);
+                }
+
+                bool opened = dlg.TryOpen();
+                if (opened)
+                {
+                    capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via fixed v1.21.6 ctor: GuiDialogAddWayPoint(ICoreClientAPI, WaypointMapLayer)");
+                    return true;
+                }
+
+                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint (Direct): fixed v1.21.6 ctor path returned TryOpen=false");
+                return false;
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Warning("[WaypointBeacon] Add Waypoint (Direct): fixed v1.21.6 ctor path threw: {0}", e);
+                return false;
+            }
+        }
+
+
+
+        private bool TryGetLookAtBlockPos(out int x, out int y, out int z)
+        {
+            x = y = z = 0;
+
+            try
+            {
+                var sel = capi?.World?.Player?.CurrentBlockSelection;
+                if (sel?.Position == null) return false;
+
+                int rawX = sel.Position.X;
+                int rawY = sel.Position.Y;
+                int rawZ = sel.Position.Z;
+
+                int mapSizeX = capi?.World?.BlockAccessor?.MapSizeX ?? 0;
+                int mapSizeZ = capi?.World?.BlockAccessor?.MapSizeZ ?? 0;
+
+                x = NormalizeWrappedCoord(rawX, mapSizeX);
+                y = rawY;
+                z = NormalizeWrappedCoord(rawZ, mapSizeZ);
+
+                if (rawX != x || rawZ != z)
+                {
+                    capi?.Logger?.Notification("[WaypointBeacon] Add Waypoint (Direct): normalized look-pos raw={0},{1},{2} -> norm={3},{4},{5} (map={6}x{7})", rawX, rawY, rawZ, x, y, z, mapSizeX, mapSizeZ);
+                }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private int NormalizeWrappedCoord(int value, int mapSize)
+        {
+            if (mapSize <= 0) return value;
+
+            int half = mapSize / 2;
+            if (value > half) return value - mapSize;
+            if (value < -half) return value + mapSize;
+            return value;
+        }
+
+        private void ApplyInitialAddWaypointPosition(GuiDialogAddWayPoint dlg, int x, int y, int z)
+        {
+            if (dlg == null) return;
+
+            try
+            {
+                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var dt = dlg.GetType();
+
+                bool applied = false;
+
+                // 1) Try direct XYZ members on dialog
+                applied |= TrySetIntMember(dlg, dt, flags, x, "x", "X", "posX", "targetX", "waypointX");
+                applied |= TrySetIntMember(dlg, dt, flags, y, "y", "Y", "posY", "targetY", "waypointY");
+                applied |= TrySetIntMember(dlg, dt, flags, z, "z", "Z", "posZ", "targetZ", "waypointZ");
+
+                // 2) Try nested position object members
+                foreach (string posName in new[] { "position", "Position", "pos", "Pos", "targetPos", "TargetPos", "waypointPos", "WaypointPos" })
+                {
+                    object posObj = TryGetMember(dlg, posName);
+                    if (posObj == null) continue;
+
+                    var pt = posObj.GetType();
+                    bool px = TrySetIntMember(posObj, pt, flags, x, "x", "X");
+                    bool py = TrySetIntMember(posObj, pt, flags, y, "y", "Y");
+                    bool pz = TrySetIntMember(posObj, pt, flags, z, "z", "Z");
+                    if (px || py || pz) applied = true;
+                }
+
+                capi?.Logger?.Notification("[WaypointBeacon] Add Waypoint (Direct): look-pos {0},{1},{2} applied={3}", x, y, z, applied);
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] Add Waypoint (Direct): failed applying look-pos: {0}", e);
+            }
+        }
+
+        private bool TrySetIntMember(object obj, Type t, BindingFlags flags, int value, params string[] names)
+        {
+            foreach (string name in names)
+            {
+                try
+                {
+                    var p = t.GetProperty(name, flags);
+                    if (p != null && p.CanWrite)
+                    {
+                        if (p.PropertyType == typeof(int)) { p.SetValue(obj, value); return true; }
+                        if (p.PropertyType == typeof(double)) { p.SetValue(obj, (double)value); return true; }
+                        if (p.PropertyType == typeof(float)) { p.SetValue(obj, (float)value); return true; }
+                    }
+
+                    var f = t.GetField(name, flags);
+                    if (f != null)
+                    {
+                        if (f.FieldType == typeof(int)) { f.SetValue(obj, value); return true; }
+                        if (f.FieldType == typeof(double)) { f.SetValue(obj, (double)value); return true; }
+                        if (f.FieldType == typeof(float)) { f.SetValue(obj, (float)value); return true; }
+                    }
+                }
+                catch { }
+            }
+
+            return false;
+        }
+
+        private bool TryInvokeSystemHotkeysAddWaypoint()
+        {
+            try
+            {
+                var loader = capi?.ModLoader;
+                if (loader == null) return false;
+
+                foreach (var sys in EnumerateLoaderObjects(loader))
+                {
+                    if (sys == null) continue;
+                    var t = sys.GetType();
+                    string tn = t.FullName ?? t.Name ?? "";
+                    if (tn.IndexOf("SystemHotkeys", StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+                    var methods = t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                        .Where(m =>
+                        {
+                            string n = m.Name.ToLowerInvariant();
+                            return n.Contains("add") && n.Contains("way") && n.Contains("point") && IsSafeAddWaypointMethod(m);
+                        })
+                        .OrderBy(m => m.GetParameters().Length)
+                        .ToArray();
+
+                    foreach (var m in methods)
+                    {
+                        if (!TryInvokeAddWaypointMethod(sys, m)) continue;
+                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via fixed v1.21.6 hotkey method: {0}.{1}", t.FullName, m.Name);
+                        return true;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] SystemHotkeys add-waypoint path failed: {0}", e);
+            }
+
+            return false;
+        }
+
+        private IEnumerable<object> EnumerateLoaderObjects(object loader)
+        {
+            var seen = new HashSet<object>();
+            foreach (string name in new[] { "systems", "Systems", "modsystems", "ModSystems", "clientSystems", "loadedSystems", "LoadedSystems" })
+            {
+                object val = TryGetMember(loader, name);
+                foreach (var obj in FlattenAny(val))
+                {
+                    if (obj != null && seen.Add(obj)) yield return obj;
+                }
+            }
+
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var t = loader.GetType();
+            foreach (var f in t.GetFields(flags))
+            {
+                if (!f.Name.ToLowerInvariant().Contains("system")) continue;
+                object val = null;
+                try { val = f.GetValue(loader); } catch { }
+                foreach (var obj in FlattenAny(val))
+                {
+                    if (obj != null && seen.Add(obj)) yield return obj;
+                }
+            }
+        }
+
+        private IEnumerable<object> FlattenAny(object val)
+        {
+            if (val == null) yield break;
+            if (val is System.Collections.IDictionary d)
+            {
+                foreach (System.Collections.DictionaryEntry de in d) if (de.Value != null) yield return de.Value;
+                yield break;
+            }
+            if (val is System.Collections.IEnumerable en && !(val is string))
+            {
+                foreach (var item in en)
+                {
+                    if (item == null) continue;
+                    object v = TryGetMember(item, "Value") ?? item;
+                    if (v != null) yield return v;
+                }
+                yield break;
+            }
+            yield return val;
+        }
+
+        private bool TryTriggerVanillaAddWaypointByCode()
+        {
+            try
+            {
+                var input = capi?.Input;
+                if (input == null) return false;
+
+                var codes = new List<string>
+                {
+                    "addwaypoint", "add-waypoint", "addWaypoint", "worldmap-addwaypoint", "hotkey-addwaypoint"
+                };
+
+                // Discover extra candidate codes from registered hotkeys
+                try
+                {
+                    object hotkeysObj =
+                        TryGetMember(input, "HotKeys") ??
+                        TryGetMember(input, "hotKeys") ??
+                        TryGetMember(input, "Hotkeys") ??
+                        TryGetMember(input, "hotkeys");
+
+                    if (hotkeysObj is System.Collections.IDictionary dict)
+                    {
+                        foreach (System.Collections.DictionaryEntry de in dict)
+                        {
+                            if (!IsLikelyAddWaypointHotkey(de.Value)) continue;
+                            string c = (TryGetMember(de.Value, "Code") ?? TryGetMember(de.Value, "code") ?? "").ToString();
+                            if (!string.IsNullOrWhiteSpace(c) && !codes.Contains(c)) codes.Add(c);
+                        }
+                    }
+                }
+                catch { }
+
+                var methods = input.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .Where(m => m.Name.IndexOf("trigger", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                                m.Name.IndexOf("hotkey", StringComparison.OrdinalIgnoreCase) >= 0)
+                    .ToArray();
+
+                foreach (var code in codes)
+                {
+                    foreach (var m in methods)
+                    {
+                        if (TryInvokeTriggerMethod(input, m, code))
+                        {
+                            capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via trigger-by-code '{0}' using {1}", code, m.Name);
+                            return true;
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] Trigger-by-code path failed: {0}", e);
+            }
+
+            return false;
+        }
+
+        private bool TryInvokeTriggerMethod(object target, MethodInfo method, string hotkeyCode)
+        {
+            try
+            {
+                var ps = method.GetParameters();
+                object[] args = new object[ps.Length];
+
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    var pt = ps[i].ParameterType;
+                    if (pt == typeof(string))
+                    {
+                        args[i] = hotkeyCode;
+                    }
+                    else if (typeof(KeyCombination).IsAssignableFrom(pt))
+                    {
+                        args[i] = CreateDirectAddWaypointKeyCombination();
+                    }
+                    else if (pt == typeof(bool))
+                    {
+                        // conservative defaults for optional trigger flags
+                        args[i] = false;
+                    }
+                    else if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (typeof(IWorldAccessor).IsAssignableFrom(pt)) args[i] = capi?.World;
+                    else if (typeof(IPlayer).IsAssignableFrom(pt)) args[i] = capi?.World?.Player;
+                    else if (pt.IsValueType) args[i] = Activator.CreateInstance(pt);
+                    else args[i] = null;
+                }
+
+                object ret = method.Invoke(target, args);
+                if (ret is bool b) return b;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool TryInvokeVanillaAddWaypointHotkey()
+        {
+            try
+            {
+                var input = capi?.Input;
+                if (input == null) return false;
+
+                var hk = FindVanillaAddWaypointHotkey(input);
+                if (hk == null) return false;
+
+                var comb = CreateDirectAddWaypointKeyCombination();
+                if (comb == null) comb = new KeyCombination();
+
+                // 1) Try callable methods first.
+                var methods = hk.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                foreach (var m in methods)
+                {
+                    string n = m.Name.ToLowerInvariant();
+                    if (!(n.Contains("trigger") || n.Contains("invoke") || n.Contains("handler") || n.Contains("execute"))) continue;
+
+                    if (TryInvokeAddWaypointMethod(hk, m))
+                    {
+                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey method {0}.{1}", hk.GetType().Name, m.Name);
+                        return true;
+                    }
+
+                    // Direct invoke with our keycomb if it expects exactly one KeyCombination.
+                    var ps = m.GetParameters();
+                    if (ps.Length == 1 && typeof(KeyCombination).IsAssignableFrom(ps[0].ParameterType))
+                    {
+                        try
+                        {
+                            object ret = m.Invoke(hk, new object[] { comb });
+                            if (ret is bool b && !b) continue;
+                            capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey direct invoke {0}.{1}", hk.GetType().Name, m.Name);
+                            return true;
+                        }
+                        catch { }
+                    }
+                }
+
+                // 2) Try delegate fields/properties.
+                var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                foreach (var f in hk.GetType().GetFields(flags))
+                {
+                    if (!typeof(Delegate).IsAssignableFrom(f.FieldType)) continue;
+                    if (!f.Name.ToLowerInvariant().Contains("handler")) continue;
+                    var del = f.GetValue(hk) as Delegate;
+                    if (TryInvokeDelegateForHotkey(del, comb))
+                    {
+                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey delegate field {0}", f.Name);
+                        return true;
+                    }
+                }
+
+                foreach (var pr in hk.GetType().GetProperties(flags))
+                {
+                    if (!pr.CanRead) continue;
+                    if (!typeof(Delegate).IsAssignableFrom(pr.PropertyType)) continue;
+                    if (!pr.Name.ToLowerInvariant().Contains("handler")) continue;
+                    var del = pr.GetValue(hk) as Delegate;
+                    if (TryInvokeDelegateForHotkey(del, comb))
+                    {
+                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey delegate property {0}", pr.Name);
+                        return true;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] Vanilla Add Waypoint hotkey invoke failed: {0}", e);
+            }
+
+            return false;
+        }
+
+        private object FindVanillaAddWaypointHotkey(object input)
+        {
+            try
+            {
+                var t = input.GetType();
+                var getByCode = t.GetMethod("GetHotKeyByCode", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+                string[] codes = { "addwaypoint", "add-waypoint", "addWaypoint", "worldmap-addwaypoint", "hotkey-addwaypoint" };
+                if (getByCode != null)
+                {
+                    foreach (var code in codes)
+                    {
+                        try
+                        {
+                            var hk = getByCode.Invoke(input, new object[] { code });
+                            if (hk != null) return hk;
+                        }
+                        catch { }
+                    }
+                }
+
+                object hotkeysObj =
+                    TryGetMember(input, "HotKeys") ??
+                    TryGetMember(input, "hotKeys") ??
+                    TryGetMember(input, "Hotkeys") ??
+                    TryGetMember(input, "hotkeys");
+
+                if (hotkeysObj is System.Collections.IDictionary dict)
+                {
+                    foreach (System.Collections.DictionaryEntry de in dict)
+                    {
+                        if (de.Value == null) continue;
+                        if (IsLikelyAddWaypointHotkey(de.Value)) return de.Value;
+                    }
+                }
+                else if (hotkeysObj is System.Collections.IEnumerable en)
+                {
+                    foreach (var item in en)
+                    {
+                        if (item == null) continue;
+                        if (IsLikelyAddWaypointHotkey(item)) return item;
+                    }
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        private bool IsLikelyAddWaypointHotkey(object hk)
+        {
+            if (hk == null) return false;
+            string code = (TryGetMember(hk, "Code") ?? TryGetMember(hk, "code") ?? "").ToString();
+            string name = (TryGetMember(hk, "Name") ?? TryGetMember(hk, "name") ?? TryGetMember(hk, "Description") ?? "").ToString();
+            string probe = (code + " " + name).ToLowerInvariant();
+
+            if (probe.Contains("waypoint") && probe.Contains("add"))
+            {
+                if (probe.Contains("waypointbeacon")) return false;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryInvokeDelegateForHotkey(Delegate del, KeyCombination comb)
+        {
+            if (del == null) return false;
+            try
+            {
+                var ps = del.Method.GetParameters();
+                object[] args = new object[ps.Length];
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    var pt = ps[i].ParameterType;
+                    if (typeof(KeyCombination).IsAssignableFrom(pt)) args[i] = comb;
+                    else if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (pt.IsValueType) args[i] = Activator.CreateInstance(pt);
+                    else args[i] = null;
+                }
+
+                object ret = del.DynamicInvoke(args);
+                if (ret is bool b) return b;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool TryInvokeKnownAddWaypointAction(object target)
+        {
+            if (target == null) return false;
+
+            var names = new[]
+            {
+                "OnAddWaypoint", "OnAddWayPoint", "OnHotkeyAddWaypoint", "OnHotKeyAddWaypoint",
+                "OpenAddWaypointDialog", "OpenAddWayPointDialog", "ShowAddWaypointDialog", "ShowAddWayPointDialog",
+                "AddWaypoint", "AddWayPoint", "OpenNewWaypointDialog", "ShowNewWaypointDialog"
+            };
+
+            foreach (string name in names)
+            {
+                var method = target.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                    .FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+
+                if (method == null) continue;
+                if (!IsSafeAddWaypointMethod(method)) continue;
+                if (TryInvokeAddWaypointMethod(target, method))
+                {
+                    capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via {0}.{1}", target.GetType().Name, method.Name);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsSafeAddWaypointMethod(MethodInfo method)
+        {
+            if (method == null) return false;
+
+            string n = (method.Name ?? "").ToLowerInvariant();
+            if (n.StartsWith("oncmd")) return false;
+            if (n.Contains("temporary")) return false;
+
+            var ps = method.GetParameters();
+            foreach (var p in ps)
+            {
+                var pt = p.ParameterType;
+                string ptn = pt.FullName ?? pt.Name ?? "";
+
+                if (typeof(IServerPlayer).IsAssignableFrom(pt)) return false;
+                if (ptn.IndexOf("ServerPlayer", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+                if (ptn.IndexOf("TextCommandCallingArgs", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+                if (ptn.IndexOf("Waypoint", StringComparison.OrdinalIgnoreCase) >= 0 && !ptn.Contains("WaypointMapLayer")) return false;
+            }
+
+            return true;
+        }
+
+        private bool TryInvokeAddWaypointMethod(object target, MethodInfo method)
+        {
+            try
+            {
+                var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+                object waypointLayer = GetWaypointMapLayerObject(mapManager);
+                var ps = method.GetParameters();
+                object[] args = new object[ps.Length];
+
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    var pt = ps[i].ParameterType;
+
+                    if (typeof(KeyCombination).IsAssignableFrom(pt)) args[i] = CreateDirectAddWaypointKeyCombination();
+                    else if (typeof(ICoreClientAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (typeof(ICoreAPI).IsAssignableFrom(pt)) args[i] = capi;
+                    else if (typeof(WorldMapManager).IsAssignableFrom(pt)) args[i] = mapManager;
+                    else if (typeof(IWorldAccessor).IsAssignableFrom(pt)) args[i] = capi?.World;
+                    else if (typeof(IPlayer).IsAssignableFrom(pt)) args[i] = capi?.World?.Player;
+                    else if (waypointLayer != null && pt.IsInstanceOfType(waypointLayer)) args[i] = waypointLayer;
+                    else if (pt.IsValueType) args[i] = Activator.CreateInstance(pt);
+                    else if (pt == typeof(string)) args[i] = string.Empty;
+                    else args[i] = null;
+                }
+
+                object ret = method.Invoke(target, args);
+                if (ret is bool b) return b;
+                return true;
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Debug("[WaypointBeacon] Add Waypoint invoke failed on {0}.{1}: {2}", target?.GetType()?.Name, method?.Name, e.InnerException ?? e);
+                return false;
+            }
+        }
+
+        private KeyCombination CreateDirectAddWaypointKeyCombination()
+        {
+            try
+            {
+                var comb = new KeyCombination();
+                comb.KeyCode = (int)GlKeys.B;
+                return comb;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private object GetWaypointMapLayerObject(WorldMapManager mapManager)
+        {
+            return mapManager?.MapLayers?.FirstOrDefault(l =>
+                l != null && l.GetType().Name.IndexOf("WaypointMapLayer", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private bool TryInvokeAddWaypointOpenMethod(object target)
+        {
+            if (target == null) return false;
+
+            var t = target.GetType();
+            var methods = t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Where(m =>
+                {
+                    string n = m.Name.ToLowerInvariant();
+                    bool isVanillaType = (t.FullName ?? "").StartsWith("Vintagestory", StringComparison.OrdinalIgnoreCase);
+                    bool waypointAction = n.Contains("way") && n.Contains("point") && (n.Contains("add") || n.Contains("new") || n.Contains("create"));
+                    bool vanillaMarkerAction = isVanillaType && n.Contains("marker") && (n.Contains("add") || n.Contains("new") || n.Contains("create"));
+                    return waypointAction || vanillaMarkerAction;
+                })
+                .Where(IsSafeAddWaypointMethod)
+                .OrderBy(m => m.GetParameters().Length)
+                .ToArray();
+
+            foreach (var m in methods)
+            {
+                if (!TryInvokeAddWaypointMethod(target, m)) continue;
+
+                capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via {0}.{1}", t.Name, m.Name);
+                return true;
+            }
+
+            return false;
+        }
+
         private bool OnToggleBeacons(KeyCombination comb)
         {
             try
             {
+                capi?.Logger?.Notification("[WaypointBeacon] Beacon Manager hotkey pressed ({0})", comb?.ToString() ?? "unknown");
+
                 // Reliable toggle: don't use TryClose() as an "is open" test.
                 // We track open/closed via the dialog's OnGuiOpened/OnGuiClosed callbacks.
                 if (beaconManagerIsOpen && beaconManagerDialog != null)
