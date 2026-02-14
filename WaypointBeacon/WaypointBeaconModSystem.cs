@@ -58,7 +58,6 @@ namespace WaypointBeacon
         private GuiDialogBeaconManagerSettings beaconManagerDialog;
         private bool beaconManagerIsOpen;
         private long tickListenerId;
-        private long lastAddWaypointHotkeyTicks;
         private BeaconLabelRenderer labelRenderer;
         private BeaconBeamRenderer beamRenderer;
 
