@@ -694,3 +694,4 @@ packages/
 
 # (Optional) ignore common generated artifacts if you export zips locally
 *.zip
+/WaypointBeacon/MapMarkerNetwork.cs
