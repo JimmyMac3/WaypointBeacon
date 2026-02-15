@@ -800,6 +800,13 @@ public int MaxRenderDistance
             object createdWaypoint = FindNewWaypointBySnapshot(beforeKeys, target.X + 0.5, target.Y + 0.5, target.Z + 0.5);
             if (createdWaypoint == null)
             {
+                if (string.Equals(addMethodName, "chat-command", StringComparison.OrdinalIgnoreCase))
+                {
+                    capi?.Logger?.Notification("[WaypointBeacon] Waiting for waypoint list update after /waypoint command...");
+                    capi?.Event?.RegisterCallback(_ => RetryOpenCreatedWaypointFromSnapshot(beforeKeys, target, 0), 50);
+                    return true;
+                }
+
                 capi?.Logger?.Warning("[WaypointBeacon] Added waypoint via {0}, but could not identify a newly created persistent waypoint.", addMethodName ?? "unknown method");
                 return false;
             }
@@ -810,6 +817,34 @@ public int MaxRenderDistance
             return true;
         }
 
+
+
+        private void RetryOpenCreatedWaypointFromSnapshot(HashSet<string> beforeKeys, BlockPos target, int attempt)
+        {
+            try
+            {
+                if (attempt > 40)
+                {
+                    capi?.Logger?.Warning("[WaypointBeacon] Timed out waiting for /waypoint-created marker sync at {0},{1},{2}", target.X, target.Y, target.Z);
+                    return;
+                }
+
+                object createdWaypoint = FindNewWaypointBySnapshot(beforeKeys, target.X + 0.5, target.Y + 0.5, target.Z + 0.5);
+                if (createdWaypoint != null)
+                {
+                    var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+                    object waypointLayer = GetWaypointMapLayerObject(mapManager);
+                    if (waypointLayer != null && TryOpenEditDialogForWaypoint(waypointLayer, createdWaypoint))
+                    {
+                        capi?.Logger?.Notification("[WaypointBeacon] Opened Edit for /waypoint-created marker at {0},{1},{2}", target.X, target.Y, target.Z);
+                        return;
+                    }
+                }
+
+                capi?.Event?.RegisterCallback(_ => RetryOpenCreatedWaypointFromSnapshot(beforeKeys, target, attempt + 1), 50);
+            }
+            catch { }
+        }
 
         private bool TryCreateWaypointViaChatCommand(BlockPos target, string title)
         {
@@ -822,10 +857,10 @@ public int MaxRenderDistance
 
                 string[] cmds =
                 {
-                    $".waypoint addati {x} {y} {z} circle #ffd700 \"{safeTitle}\"",
                     $"/waypoint addati {x} {y} {z} circle #ffd700 \"{safeTitle}\"",
-                    $".waypoint addat {x} {y} {z} \"{safeTitle}\"",
-                    $"/waypoint addat {x} {y} {z} \"{safeTitle}\""
+                    $"/waypoint addat {x} {y} {z} \"{safeTitle}\"",
+                    $".waypoint addati {x} {y} {z} circle #ffd700 \"{safeTitle}\"",
+                    $".waypoint addat {x} {y} {z} \"{safeTitle}\""
                 };
 
                 foreach (var cmd in cmds)
