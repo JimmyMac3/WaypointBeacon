@@ -772,7 +772,19 @@ public int MaxRenderDistance
             int x = NormalizeWrappedCoord(target.X, mapSizeX);
             int z = NormalizeWrappedCoord(target.Z, mapSizeZ);
 
+            // Some environments report 0 map size here; apply a conservative fallback
+            // for known wrapped-space values like 2558xx that should be negative coords.
+            if (mapSizeX <= 0) x = NormalizeLikelyWrappedCoord(x);
+            if (mapSizeZ <= 0) z = NormalizeLikelyWrappedCoord(z);
+
             return new BlockPos(x, target.Y, z);
+        }
+
+        private int NormalizeLikelyWrappedCoord(int value)
+        {
+            if (value > 200000) return value - 256000;
+            if (value < -200000) return value + 256000;
+            return value;
         }
 
         private bool TryCreateInstantWaypointAndOpenEdit(BlockPos target)
@@ -850,29 +862,13 @@ public int MaxRenderDistance
         {
             try
             {
-                string safeTitle = string.IsNullOrWhiteSpace(title) ? "New Beacon" : title.Replace("\"", "");
-                int x = target.X;
-                int y = target.Y;
-                int z = target.Z;
+                BlockPos norm = NormalizeTargetBlockPos(target);
+                string safeTitle = string.IsNullOrWhiteSpace(title) ? "New WPB" : title.Replace("\"", "");
 
-                string[] cmds =
-                {
-                    $"/waypoint addati {x} {y} {z} circle #ffd700 \"{safeTitle}\"",
-                    $"/waypoint addat {x} {y} {z} \"{safeTitle}\"",
-                    $".waypoint addati {x} {y} {z} circle #ffd700 \"{safeTitle}\"",
-                    $".waypoint addat {x} {y} {z} \"{safeTitle}\""
-                };
-
-                foreach (var cmd in cmds)
-                {
-                    try
-                    {
-                        capi?.Logger?.Notification("[WaypointBeacon] Attempting waypoint chat command: {0}", cmd);
-                        capi?.SendChatMessage(cmd);
-                        return true;
-                    }
-                    catch { }
-                }
+                string cmd = $"/waypoint addat {norm.X} {norm.Y} {norm.Z} false #FFFFFF \"{safeTitle}\"";
+                capi?.Logger?.Notification("[WaypointBeacon] Attempting waypoint chat command: {0}", cmd);
+                capi?.SendChatMessage(cmd);
+                return true;
             }
             catch (Exception e)
             {
