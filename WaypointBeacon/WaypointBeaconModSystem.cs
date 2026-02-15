@@ -150,46 +150,19 @@ namespace WaypointBeacon
 
         public class WaypointBeaconClientConfig
         {
-            public bool GlobalBeaconsEnabled = true;
-
-            // Render beacon beams (vertical light columns)
-            public bool BeamsEnabled = true;
-
-            // Fade out beacon beams/labels when the player is very close
-            public bool NearBeaconFadeOut = true;
-
-
-            // Show waypoint icons next to beacon labels
-            public bool ShowIconsInLabels = true;
-
-
-            // Label visibility: 0=Always, 1=Never, 2=AutoHide
-            public int ShowLabelsMode = 2;
-            
-            // Label style: 0=LabelOnly, 1=Label+Distance, 2=Label+Coords
-            public int LabelStyleMode = 1;
-
-
-            // Label font size slider (0..100). 100 = WhiteMediumText size, scaled down for smaller values.
+            // Order intentionally matches Beacon Manager UI (top-to-bottom).
             public int LabelFontSize = 80;
-
-            // Render distance settings (blocks XZ)
-            // renderDistance = current slider value
-            // maxRenderDistance = upper limit for the slider
+            public int LabelStyleMode = 1;
+            public int ShowLabelsMode = 2;
             public int renderDistance = 1000;
             public int maxRenderDistance = 1000;
-
-            // Near-beacon fade tuning (blocks)
+            public bool NearBeaconFadeOut = true;
             public double NearFadeStartBlocks = 25.0;
             public double NearFadeEndBlocks = 10.0;
-
-
-            // Default state for the "Beacon" switch when adding a new waypoint
             public bool DefaultNewWaypointBeaconOn = true;
-            // Last user choice in the Add Waypoint dialog (null => use DefaultNewWaypointBeaconOn)
-            public bool? LastAddBeaconChoice = null;
-
-                    }
+            public bool GlobalBeaconsEnabled = true;
+            public bool BeamsEnabled = true;
+        }
 
         private WaypointBeaconClientConfig clientConfig = new WaypointBeaconClientConfig();
 
@@ -314,21 +287,6 @@ private float TryGetCairoFontPx(CairoFont font)
         }
 
 
-        public void SetShowIconsInLabels(bool show)
-        {
-            if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
-            clientConfig.ShowIconsInLabels = true;
-
-            try
-            {
-                capi?.StoreModConfig(clientConfig, ClientConfigFileName);
-            }
-            catch { }
-
-            // Force a label refresh so any icon layout changes apply immediately
-            RefreshBeaconsNow();
-        }
-
         public void SetGlobalBeaconsEnabled(bool enabled)
         {
             if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
@@ -439,14 +397,8 @@ private float TryGetCairoFontPx(CairoFont font)
 
 
         /// <summary>What the Add Waypoint dialog checkbox should default to.</summary>
-        public bool AddDialogBeaconChoice => (clientConfig?.LastAddBeaconChoice ?? clientConfig?.DefaultNewWaypointBeaconOn) ?? false;
+        public bool AddDialogBeaconChoice => clientConfig?.DefaultNewWaypointBeaconOn ?? false;
 
-        public void SetLastAddBeaconChoice(bool on)
-        {
-            if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
-            clientConfig.LastAddBeaconChoice = on;
-            try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
-        }
         public void SetDefaultNewWaypointBeaconOn(bool on)
         {
             if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
@@ -3966,7 +3918,7 @@ private static double Clamp(double v, double lo, double hi)
             {
                 if (__instance?.SingleComposer == null || mod == null) return;
 
-                // Add dialog default choice (remember last selection, or fall back to manager default)
+                // Add dialog default choice from manager default setting
                 bool on = mod.AddDialogBeaconChoice;
                 TrySetSwitchState(__instance.SingleComposer, BeaconSwitchKey, on);
             }
@@ -3999,9 +3951,6 @@ private static double Clamp(double v, double lo, double hi)
                 if (__instance?.SingleComposer == null || mod == null) return;
 
                 bool on = TryGetSwitchState(__instance.SingleComposer, BeaconSwitchKey);
-
-                // Remember last choice for next time
-                mod.SetLastAddBeaconChoice(on);
 
                 // Apply to the newly created waypoint (it may appear in the list a tick later)
                 if (TryApplyBeaconToNewlyCreatedWaypoint(on))
