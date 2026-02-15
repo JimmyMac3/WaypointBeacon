@@ -146,7 +146,7 @@ namespace WaypointBeacon
         private const string PinsAttrKeyPrefix = "waypointbeacon:pins:";
 
         // ---- Client config (local only) ----
-        private const string ClientConfigFileName = "waypointbeacon-client.json";
+        private const string ClientConfigFileName = "waypointbeacon.json";
 
         public class WaypointBeaconClientConfig
         {
@@ -173,9 +173,11 @@ namespace WaypointBeacon
             // Label font size slider (0..100). 100 = WhiteMediumText size, scaled down for smaller values.
             public int LabelFontSize = 80;
 
-            // Render distance slider limits (blocks XZ)
-            public int MinRenderDistance = 250;
-            public int MaxRenderDistance = 1000;
+            // Render distance settings (blocks XZ)
+            // renderDistance = current slider value
+            // maxRenderDistance = upper limit for the slider
+            public int renderDistance = 1000;
+            public int maxRenderDistance = 1000;
 
             // Near-beacon fade tuning (blocks)
             public double NearFadeStartBlocks = 25.0;
@@ -187,9 +189,7 @@ namespace WaypointBeacon
             // Last user choice in the Add Waypoint dialog (null => use DefaultNewWaypointBeaconOn)
             public bool? LastAddBeaconChoice = null;
 
-            // Beacon max render distance in blocks (XZ only)
-            public int MaxRenderDistanceXZ = 1000;
-        }
+                    }
 
         private WaypointBeaconClientConfig clientConfig = new WaypointBeaconClientConfig();
 
@@ -374,53 +374,31 @@ private float TryGetCairoFontPx(CairoFont font)
         }
 
         // ---- Configurable max render distance ----
-        
-        /// <summary>Gets the configurable upper limit for beacon render distance (blocks XZ).</summary>
         /// <summary>Minimum allowed value for the beacon render distance slider (blocks XZ).</summary>
-public int MinRenderDistance
-{
-    get
-    {
-        int min = clientConfig?.MinRenderDistance ?? 250;
-        if (min < 1) min = 1;
-        if (min > 1000) min = 1000;
+        public int MinRenderDistance => 250;
 
-        int max = clientConfig?.MaxRenderDistance ?? 1000;
-        if (max < min) max = min;
-        if (max > 1000) max = 1000;
-
-        if (min > max) min = max;
-        return min;
-    }
-}
-
-/// <summary>Maximum allowed value for the beacon render distance slider (blocks XZ).</summary>
-public int MaxRenderDistance
-{
-    get
-    {
-        int max = clientConfig?.MaxRenderDistance ?? 1000;
-        if (max < 1) max = 1;
-        if (max > 1000) max = 1000;
-
-        int min = clientConfig?.MinRenderDistance ?? 250;
-        if (min < 1) min = 1;
-        if (min > 1000) min = 1000;
-
-        if (max < min) max = min;
-        return max;
-    }
-}
+        /// <summary>Maximum allowed value for the beacon render distance slider (blocks XZ).</summary>
+        public int MaxRenderDistance
+        {
+            get
+            {
+                int max = clientConfig?.maxRenderDistance ?? 1000;
+                if (max < MinRenderDistance) max = MinRenderDistance;
+                if (max > 50000) max = 50000;
+                return max;
+            }
+        }
 
         /// <summary>Sets the configurable upper limit for beacon render distance.</summary>
         public void SetMaxRenderDistance(int blocks)
         {
             if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
 
-            if (blocks < 500) blocks = 500;
-            if (blocks > 10000) blocks = 10000;
+            if (blocks < MinRenderDistance) blocks = MinRenderDistance;
+            if (blocks > 50000) blocks = 50000;
 
-            clientConfig.MaxRenderDistance = blocks;
+            clientConfig.maxRenderDistance = blocks;
+            if (clientConfig.renderDistance > blocks) clientConfig.renderDistance = blocks;
 
             try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
 
@@ -434,7 +412,7 @@ public int MaxRenderDistance
         {
             get
             {
-                int val = clientConfig?.MaxRenderDistanceXZ ?? 1000;
+                int val = clientConfig?.renderDistance ?? 1000;
                 if (val < MinRenderDistance) val = MinRenderDistance;
                 if (val > MaxRenderDistance) val = MaxRenderDistance;
                 return val;
@@ -448,7 +426,7 @@ public int MaxRenderDistance
             if (blocks < MinRenderDistance) blocks = MinRenderDistance;
             if (blocks > MaxRenderDistance) blocks = MaxRenderDistance;
 
-            clientConfig.MaxRenderDistanceXZ = blocks;
+            clientConfig.renderDistance = blocks;
 
             try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
 
