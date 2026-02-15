@@ -680,6 +680,11 @@ public int MaxRenderDistance
                     ?? capi.World.Player.Entity.Pos.AsBlockPos;
 
                 BlockPos target = NormalizeTargetBlockPos(rawTarget);
+                if (rawTarget != null && (rawTarget.X != target.X || rawTarget.Z != target.Z))
+                {
+                    capi?.Logger?.Notification("[WaypointBeacon] Normalized target coords raw={0},{1},{2} -> norm={3},{4},{5}", rawTarget.X, rawTarget.Y, rawTarget.Z, target.X, target.Y, target.Z);
+                }
+
                 bool opened = TryRequestServerWaypointAndOpenEdit(target);
                 if (!opened)
                 {
@@ -772,12 +777,40 @@ public int MaxRenderDistance
             int x = NormalizeWrappedCoord(target.X, mapSizeX);
             int z = NormalizeWrappedCoord(target.Z, mapSizeZ);
 
-            // Some environments report 0 map size here; apply a conservative fallback
-            // for known wrapped-space values like 2558xx that should be negative coords.
+            // Prefer the wrapped coordinate nearest to the player's actual position.
+            double? playerX = capi?.World?.Player?.Entity?.Pos?.X;
+            double? playerZ = capi?.World?.Player?.Entity?.Pos?.Z;
+            x = ResolveClosestWrappedCoord(x, playerX, mapSizeX);
+            z = ResolveClosestWrappedCoord(z, playerZ, mapSizeZ);
+
+            // Some environments report 0/invalid map size here; apply fallback
+            // for wrapped-space values like 2558xx that should be negative coords.
             if (mapSizeX <= 0) x = NormalizeLikelyWrappedCoord(x);
             if (mapSizeZ <= 0) z = NormalizeLikelyWrappedCoord(z);
 
             return new BlockPos(x, target.Y, z);
+        }
+
+        private int ResolveClosestWrappedCoord(int value, double? reference, int mapSize)
+        {
+            if (!reference.HasValue || mapSize <= 0) return value;
+
+            int best = value;
+            double bestDist = Math.Abs(value - reference.Value);
+
+            // Check nearby wrapped variants and pick the nearest to player position.
+            for (int k = -3; k <= 3; k++)
+            {
+                int candidate = value + (k * mapSize);
+                double dist = Math.Abs(candidate - reference.Value);
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    best = candidate;
+                }
+            }
+
+            return best;
         }
 
         private int NormalizeLikelyWrappedCoord(int value)
