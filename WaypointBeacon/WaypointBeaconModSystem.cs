@@ -783,10 +783,10 @@ public int MaxRenderDistance
             x = ResolveClosestWrappedCoord(x, playerX, mapSizeX);
             z = ResolveClosestWrappedCoord(z, playerZ, mapSizeZ);
 
-            // Some environments report 0/invalid map size here; apply fallback
-            // for wrapped-space values like 2558xx that should be negative coords.
-            if (mapSizeX <= 0) x = NormalizeLikelyWrappedCoord(x);
-            if (mapSizeZ <= 0) z = NormalizeLikelyWrappedCoord(z);
+            // Always apply a final wrapped-space sanity pass for large absolute coords
+            // (e.g. 2558xx -> -1xx) regardless of map-size metadata quality.
+            x = NormalizeLikelyWrappedCoord(x);
+            z = NormalizeLikelyWrappedCoord(z);
 
             return new BlockPos(x, target.Y, z);
         }
@@ -815,8 +815,12 @@ public int MaxRenderDistance
 
         private int NormalizeLikelyWrappedCoord(int value)
         {
-            if (value > 200000) return value - 256000;
-            if (value < -200000) return value + 256000;
+            const int wrap = 256000;
+            const int half = 128000;
+
+            while (value > half) value -= wrap;
+            while (value < -half) value += wrap;
+
             return value;
         }
 
