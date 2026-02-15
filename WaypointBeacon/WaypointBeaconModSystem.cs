@@ -886,6 +886,8 @@ public int MaxRenderDistance
                     object waypointLayer = GetWaypointMapLayerObject(mapManager);
                     if (waypointLayer != null)
                     {
+                        // Respect the New Waypoint = Beacon default for chat-created waypoints.
+                        SetBeaconOnForWaypointObject(createdWaypoint, DefaultNewWaypointBeaconOn);
                         PrepareWaypointForImmediateRename(createdWaypoint);
                         if (TryOpenEditDialogForWaypoint(waypointLayer, createdWaypoint))
                         {
