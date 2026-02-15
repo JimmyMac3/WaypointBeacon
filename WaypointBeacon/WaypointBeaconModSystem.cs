@@ -48,6 +48,17 @@ namespace WaypointBeacon
         [ProtoMember(2)] public List<bool> Pinned { get; set; } = new List<bool>();
     }
 
+    [ProtoContract]
+    public class WbCreateWaypointPacket
+    {
+        [ProtoMember(1)] public int X { get; set; }
+        [ProtoMember(2)] public int Y { get; set; }
+        [ProtoMember(3)] public int Z { get; set; }
+        [ProtoMember(4)] public string Title { get; set; }
+        [ProtoMember(5)] public string Icon { get; set; }
+        [ProtoMember(6)] public string Color { get; set; }
+    }
+
 
     public class WaypointBeaconModSystem : ModSystem
     {
@@ -576,7 +587,8 @@ public int MaxRenderDistance
                 .RegisterChannel("waypointbeacon")
                 .RegisterMessageType<WbSetPinnedPacket>()
                 .RegisterMessageType<WbRequestPinsPacket>()
-                .RegisterMessageType<WbPinsSyncPacket>();
+                .RegisterMessageType<WbPinsSyncPacket>()
+                .RegisterMessageType<WbCreateWaypointPacket>();
 
             clientChannel.SetMessageHandler<WbPinsSyncPacket>(OnPinsSyncPacket);
 
@@ -622,7 +634,8 @@ public int MaxRenderDistance
                 .RegisterChannel("waypointbeacon")
                 .RegisterMessageType<WbSetPinnedPacket>()
                 .RegisterMessageType<WbRequestPinsPacket>()
-                .RegisterMessageType<WbPinsSyncPacket>();
+                .RegisterMessageType<WbPinsSyncPacket>()
+                .RegisterMessageType<WbCreateWaypointPacket>();
 
             serverChannel.SetMessageHandler<WbSetPinnedPacket>((player, pkt) =>
             {
@@ -632,6 +645,11 @@ public int MaxRenderDistance
             serverChannel.SetMessageHandler<WbRequestPinsPacket>((player, pkt) =>
             {
                 SendPinsToPlayer(api, player);
+            });
+
+            serverChannel.SetMessageHandler<WbCreateWaypointPacket>((player, pkt) =>
+            {
+                HandleCreateWaypointPacket(api, player, pkt);
             });
 
             // Push saved pins to players when they join (small delay so channel is ready)
@@ -662,7 +680,12 @@ public int MaxRenderDistance
                     ?? capi.World.Player.Entity.Pos.AsBlockPos;
 
                 BlockPos target = NormalizeTargetBlockPos(rawTarget);
-                bool opened = TryCreateInstantWaypointAndOpenEdit(target);
+                bool opened = TryRequestServerWaypointAndOpenEdit(target);
+                if (!opened)
+                {
+                    // Last resort legacy path
+                    opened = TryCreateInstantWaypointAndOpenEdit(target);
+                }
                 if (!opened)
                 {
                     capi?.Logger?.Warning("[WaypointBeacon] Add Beacon hotkey failed to create/edit waypoint at {0},{1},{2}", target.X, target.Y, target.Z);
@@ -675,6 +698,59 @@ public int MaxRenderDistance
                 capi?.Logger?.Error("[WaypointBeacon] Failed to open Add Beacon dialog: {0}", e);
                 return false;
             }
+        }
+
+        private bool TryRequestServerWaypointAndOpenEdit(BlockPos target)
+        {
+            try
+            {
+                if (clientChannel?.Connected != true) return false;
+
+                var beforeKeys = SnapshotWaypointKeys();
+                var pkt = new WbCreateWaypointPacket
+                {
+                    X = target.X,
+                    Y = target.Y,
+                    Z = target.Z,
+                    Title = "New Beacon",
+                    Icon = "circle",
+                    Color = "#ffd700"
+                };
+
+                clientChannel.SendPacket(pkt);
+                capi?.Logger?.Notification("[WaypointBeacon] Requested server waypoint create at {0},{1},{2}", target.X, target.Y, target.Z);
+
+                capi?.Event?.RegisterCallback(_ => RetryOpenServerCreatedWaypoint(beforeKeys, target, 0), 50);
+                return true;
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Warning("[WaypointBeacon] Failed requesting server waypoint create: {0}", e.Message);
+                return false;
+            }
+        }
+
+        private void RetryOpenServerCreatedWaypoint(HashSet<string> beforeKeys, BlockPos target, int attempt)
+        {
+            try
+            {
+                if (attempt > 40) return;
+
+                object createdWaypoint = FindNewWaypointBySnapshot(beforeKeys, target.X + 0.5, target.Y + 0.5, target.Z + 0.5);
+                if (createdWaypoint != null)
+                {
+                    var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
+                    object waypointLayer = GetWaypointMapLayerObject(mapManager);
+                    if (waypointLayer != null && TryOpenEditDialogForWaypoint(waypointLayer, createdWaypoint))
+                    {
+                        capi?.Logger?.Notification("[WaypointBeacon] Opened Edit for server-created waypoint at {0},{1},{2}", target.X, target.Y, target.Z);
+                        return;
+                    }
+                }
+
+                capi?.Event?.RegisterCallback(_ => RetryOpenServerCreatedWaypoint(beforeKeys, target, attempt + 1), 50);
+            }
+            catch { }
         }
 
         private BlockPos NormalizeTargetBlockPos(BlockPos target)
@@ -2551,6 +2627,139 @@ public int MaxRenderDistance
             {
                 sapi.Logger.Error("[WaypointBeacon] Server HandleSetPinnedPacket failed: {0}", e);
             }
+        }
+
+        private void HandleCreateWaypointPacket(ICoreServerAPI sapi, IServerPlayer player, WbCreateWaypointPacket pkt)
+        {
+            try
+            {
+                if (player == null || pkt == null) return;
+
+                var mapManager = sapi.ModLoader.GetModSystem<WorldMapManager>();
+                if (mapManager == null) return;
+
+                object mapData = TryGetServerPlayerMapData(mapManager, player);
+                if (mapData == null) return;
+
+                if (!TryGetWaypointsListFromMapData(mapData, out IList list) || list == null) return;
+
+                var wp = new Waypoint();
+                double px = pkt.X + 0.5;
+                double py = pkt.Y + 0.5;
+                double pz = pkt.Z + 0.5;
+
+                TrySetMemberValueStatic(wp, "Position", new Vec3d(px, py, pz));
+                TrySetMemberValueStatic(wp, "Pos", new Vec3d(px, py, pz));
+                TrySetMemberValueStatic(wp, "X", px);
+                TrySetMemberValueStatic(wp, "Y", py);
+                TrySetMemberValueStatic(wp, "Z", pz);
+
+                string title = string.IsNullOrWhiteSpace(pkt.Title) ? "New Beacon" : pkt.Title;
+                TrySetMemberValueStatic(wp, "Title", title);
+                TrySetMemberValueStatic(wp, "Text", title);
+                TrySetMemberValueStatic(wp, "Name", title);
+                TrySetMemberValueStatic(wp, "Icon", string.IsNullOrWhiteSpace(pkt.Icon) ? "circle" : pkt.Icon);
+                TrySetMemberValueStatic(wp, "Symbol", string.IsNullOrWhiteSpace(pkt.Icon) ? "circle" : pkt.Icon);
+                TrySetMemberValueStatic(wp, "Color", string.IsNullOrWhiteSpace(pkt.Color) ? "#ffd700" : pkt.Color);
+
+                int maxId = 0;
+                foreach (var obj in list)
+                {
+                    if (obj == null) continue;
+                    int id = TryGetInt(obj, "WaypointID", "WaypointId", "WaypointIDInt", "Id", "ID", "id") ?? 0;
+                    if (id > maxId) maxId = id;
+                }
+                int newId = maxId + 1;
+                TrySetMemberValueStatic(wp, "WaypointID", newId);
+                TrySetMemberValueStatic(wp, "WaypointId", newId);
+                TrySetMemberValueStatic(wp, "Id", newId);
+                TrySetMemberValueStatic(wp, "OwningPlayerUid", player.PlayerUID);
+                TrySetMemberValueStatic(wp, "OwnerUid", player.PlayerUID);
+                TrySetMemberValueStatic(wp, "PlayerUid", player.PlayerUID);
+
+                list.Add(wp);
+
+                TryInvokeParameterlessMethodStatic(mapData, "MarkDirty");
+                TryInvokeParameterlessMethodStatic(mapManager, "MarkDirty");
+                TryInvokeParameterlessMethodStatic(mapData, "Save");
+                TryInvokeParameterlessMethodStatic(mapManager, "Save");
+
+                sapi.Logger.Notification("[WaypointBeacon] Server created waypoint id={0} for {1} at {2},{3},{4}", newId, player.PlayerUID, pkt.X, pkt.Y, pkt.Z);
+            }
+            catch (Exception e)
+            {
+                sapi.Logger.Warning("[WaypointBeacon] Server create waypoint failed: {0}", e);
+            }
+        }
+
+        private static bool TrySetMemberValueStatic(object obj, string memberName, object value)
+        {
+            if (obj == null || string.IsNullOrEmpty(memberName)) return false;
+
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            Type t = obj.GetType();
+
+            try
+            {
+                var prop = t.GetProperty(memberName, flags);
+                if (prop != null && prop.CanWrite)
+                {
+                    object converted = ConvertValueForTypeStatic(value, prop.PropertyType);
+                    if (converted != null || !prop.PropertyType.IsValueType)
+                    {
+                        prop.SetValue(obj, converted);
+                        return true;
+                    }
+                }
+
+                var field = t.GetField(memberName, flags);
+                if (field != null)
+                {
+                    object converted = ConvertValueForTypeStatic(value, field.FieldType);
+                    if (converted != null || !field.FieldType.IsValueType)
+                    {
+                        field.SetValue(obj, converted);
+                        return true;
+                    }
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
+        private static object ConvertValueForTypeStatic(object value, Type targetType)
+        {
+            if (targetType == null) return value;
+            if (value == null) return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
+            if (targetType.IsInstanceOfType(value)) return value;
+
+            try
+            {
+                if (targetType.IsEnum)
+                {
+                    if (value is string s) return Enum.Parse(targetType, s, true);
+                    return Enum.ToObject(targetType, value);
+                }
+
+                if (targetType == typeof(string)) return value.ToString();
+                return Convert.ChangeType(value, targetType);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static void TryInvokeParameterlessMethodStatic(object target, string methodName)
+        {
+            if (target == null || string.IsNullOrEmpty(methodName)) return;
+            try
+            {
+                var method = target.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
+                method?.Invoke(target, null);
+            }
+            catch { }
         }
 
         // =========================
