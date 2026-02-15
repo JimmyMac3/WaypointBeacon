@@ -70,6 +70,7 @@ namespace WaypointBeacon
         private bool beaconManagerIsOpen;
         private long tickListenerId;
         private long lastAddWaypointHotkeyTicks;
+        private int nextMapPointNumber = 1;
         private BeaconLabelRenderer labelRenderer;
         private BeaconBeamRenderer beamRenderer;
 
@@ -685,18 +686,18 @@ public int MaxRenderDistance
                     capi?.Logger?.Notification("[WaypointBeacon] Normalized target coords raw={0},{1},{2} -> norm={3},{4},{5}", rawTarget.X, rawTarget.Y, rawTarget.Z, target.X, target.Y, target.Z);
                 }
 
-                bool opened = TryRequestServerWaypointAndOpenEdit(target);
-                if (!opened)
+                string title = $"Map Point {nextMapPointNumber++}";
+                var beforeKeys = SnapshotWaypointKeys();
+
+                bool sent = TryCreateWaypointViaChatCommand(target, title);
+                if (!sent)
                 {
-                    // Last resort legacy path
-                    opened = TryCreateInstantWaypointAndOpenEdit(target);
-                }
-                if (!opened)
-                {
-                    capi?.Logger?.Warning("[WaypointBeacon] Add Beacon hotkey failed to create/edit waypoint at {0},{1},{2}", target.X, target.Y, target.Z);
+                    capi?.Logger?.Warning("[WaypointBeacon] Add Beacon hotkey failed to send /waypoint command at {0},{1},{2}", target.X, target.Y, target.Z);
+                    return false;
                 }
 
-                return opened;
+                capi?.Event?.RegisterCallback(_ => RetryOpenCreatedWaypointFromSnapshot(beforeKeys, target, 0), 50);
+                return true;
             }
             catch (Exception e)
             {
@@ -883,16 +884,32 @@ public int MaxRenderDistance
                 {
                     var mapManager = capi?.ModLoader?.GetModSystem<WorldMapManager>();
                     object waypointLayer = GetWaypointMapLayerObject(mapManager);
-                    if (waypointLayer != null && TryOpenEditDialogForWaypoint(waypointLayer, createdWaypoint))
+                    if (waypointLayer != null)
                     {
-                        capi?.Logger?.Notification("[WaypointBeacon] Opened Edit for /waypoint-created marker at {0},{1},{2}", target.X, target.Y, target.Z);
-                        return;
+                        PrepareWaypointForImmediateRename(createdWaypoint);
+                        if (TryOpenEditDialogForWaypoint(waypointLayer, createdWaypoint))
+                        {
+                            capi?.Logger?.Notification("[WaypointBeacon] Opened Edit for /waypoint-created marker at {0},{1},{2}", target.X, target.Y, target.Z);
+                            return;
+                        }
                     }
                 }
 
                 capi?.Event?.RegisterCallback(_ => RetryOpenCreatedWaypointFromSnapshot(beforeKeys, target, attempt + 1), 50);
             }
             catch { }
+        }
+
+        private void PrepareWaypointForImmediateRename(object waypoint)
+        {
+            if (waypoint == null) return;
+
+            TrySetMemberValue(waypoint, "Title", string.Empty);
+            TrySetMemberValue(waypoint, "title", string.Empty);
+            TrySetMemberValue(waypoint, "Name", string.Empty);
+            TrySetMemberValue(waypoint, "name", string.Empty);
+            TrySetMemberValue(waypoint, "Text", string.Empty);
+            TrySetMemberValue(waypoint, "text", string.Empty);
         }
 
         private bool TryCreateWaypointViaChatCommand(BlockPos target, string title)
@@ -902,7 +919,7 @@ public int MaxRenderDistance
                 BlockPos norm = NormalizeTargetBlockPos(target);
                 string safeTitle = string.IsNullOrWhiteSpace(title) ? "New WPB" : title.Replace("\"", "");
 
-                string cmd = $"/waypoint addat {norm.X} {norm.Y} {norm.Z} false #FFFFFF \"{safeTitle}\"";
+                string cmd = $"/waypoint addat {norm.X} {norm.Y} {norm.Z} false #FFFFFF {safeTitle}";
                 capi?.Logger?.Notification("[WaypointBeacon] Attempting waypoint chat command: {0}", cmd);
                 capi?.SendChatMessage(cmd);
                 return true;
