@@ -46,6 +46,13 @@ namespace WaypointBeacon
         // Parallel lists for protobuf simplicity
         [ProtoMember(1)] public List<string> Keys { get; set; } = new List<string>();
         [ProtoMember(2)] public List<bool> Pinned { get; set; } = new List<bool>();
+        [ProtoMember(3)] public bool BaselineInitialized { get; set; }
+    }
+
+    [ProtoContract]
+    public class WbBaselineInitPacket
+    {
+        // client marks per-player/per-world baseline as initialized on server
     }
 
     [ProtoContract]
@@ -141,9 +148,12 @@ namespace WaypointBeacon
         // Track waypoints we've seen this session so we can apply the default beacon setting only to newly created waypoints
         private readonly HashSet<string> seenWaypointKeys = new HashSet<string>();
         private bool worldBaselinePrepared;
+        private bool serverBaselineInitialized;
+        private bool pinsSyncReceived;
         private long clientStartMs;
 
         private const string PinsAttrKeyPrefix = "waypointbeacon:pins:";
+        private const string BaselineAttrKeyPrefix = "waypointbeacon:baseline:";
 
         // ---- Client config (local only) ----
         private const string ClientConfigFileName = "waypointbeacon.json";
@@ -162,7 +172,6 @@ namespace WaypointBeacon
             public bool DefaultNewWaypointBeaconOn = true;
             public bool GlobalBeaconsEnabled = true;
             public bool BeamsEnabled = true;
-            public List<string> BeaconBaselineInitializedWorlds = new List<string>();
         }
 
         private WaypointBeaconClientConfig clientConfig = new WaypointBeaconClientConfig();
@@ -479,51 +488,13 @@ private float TryGetCairoFontPx(CairoFont font)
         }
 
 
-        private string GetCurrentWorldBaselineKey()
-        {
-            try
-            {
-                object world = capi?.World;
-                if (world == null) return null;
-
-                var worldType = world.GetType();
-                var seedProp = worldType.GetProperty("Seed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                if (seedProp != null)
-                {
-                    object seedObj = seedProp.GetValue(world);
-                    if (seedObj != null)
-                    {
-                        string seed = Convert.ToString(seedObj, System.Globalization.CultureInfo.InvariantCulture);
-                        if (!string.IsNullOrWhiteSpace(seed)) return "seed:" + seed;
-                    }
-                }
-
-                int mapSizeX = capi?.World?.BlockAccessor?.MapSizeX ?? 0;
-                int mapSizeZ = capi?.World?.BlockAccessor?.MapSizeZ ?? 0;
-                return $"mapsize:{mapSizeX}x{mapSizeZ}";
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
         private void EnsureWorldBeaconBaselinePrepared()
         {
             if (worldBaselinePrepared) return;
-
-            if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
-            if (clientConfig.BeaconBaselineInitializedWorlds == null)
-            {
-                clientConfig.BeaconBaselineInitializedWorlds = new List<string>();
-            }
+            if (!pinsSyncReceived) return;
 
             if (!TryGetWaypointList(out _, out System.Collections.IList waypointList)) return;
             if ((waypointList?.Count ?? 0) == 0 && Environment.TickCount64 - clientStartMs < 5000) return;
-
-            string worldKey = GetCurrentWorldBaselineKey();
-            bool firstTimeInWorld = !string.IsNullOrEmpty(worldKey)
-                && !clientConfig.BeaconBaselineInitializedWorlds.Contains(worldKey);
 
             seenWaypointKeys.Clear();
 
@@ -536,7 +507,7 @@ private float TryGetCairoFontPx(CairoFont font)
 
                 seenWaypointKeys.Add(bKey);
 
-                if (firstTimeInWorld && !beaconOverrides.ContainsKey(bKey))
+                if (!serverBaselineInitialized && !beaconOverrides.ContainsKey(bKey))
                 {
                     beaconOverrides[bKey] = false;
                 }
@@ -544,10 +515,14 @@ private float TryGetCairoFontPx(CairoFont font)
 
             worldBaselinePrepared = true;
 
-            if (!string.IsNullOrEmpty(worldKey) && firstTimeInWorld)
+            if (!serverBaselineInitialized && clientChannel?.Connected == true)
             {
-                clientConfig.BeaconBaselineInitializedWorlds.Add(worldKey);
-                try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
+                try
+                {
+                    clientChannel.SendPacket(new WbBaselineInitPacket());
+                    serverBaselineInitialized = true;
+                }
+                catch { }
             }
         }
 
@@ -589,6 +564,8 @@ private float TryGetCairoFontPx(CairoFont font)
                 clientConfig = new WaypointBeaconClientConfig();
             }
             worldBaselinePrepared = false;
+            serverBaselineInitialized = false;
+            pinsSyncReceived = false;
             clientStartMs = Environment.TickCount64;
 
             clientChannel = capi.Network
@@ -596,6 +573,7 @@ private float TryGetCairoFontPx(CairoFont font)
                 .RegisterMessageType<WbSetPinnedPacket>()
                 .RegisterMessageType<WbRequestPinsPacket>()
                 .RegisterMessageType<WbPinsSyncPacket>()
+                .RegisterMessageType<WbBaselineInitPacket>()
                 .RegisterMessageType<WbCreateWaypointPacket>();
 
             clientChannel.SetMessageHandler<WbPinsSyncPacket>(OnPinsSyncPacket);
@@ -608,7 +586,6 @@ private float TryGetCairoFontPx(CairoFont font)
 
                 requestedPins = true;
                 clientChannel.SendPacket(new WbRequestPinsPacket());
-                capi.Logger.Notification("[WaypointBeacon] Requested saved pin overrides from server");
             }, 500);
             capi.Input.RegisterHotKey("waypointbeacon-togglebeacons", "Beacon Manager", GlKeys.K, HotkeyType.GUIOrOtherControls);
             capi.Input.SetHotKeyHandler("waypointbeacon-togglebeacons", OnToggleBeacons);
@@ -630,7 +607,6 @@ private float TryGetCairoFontPx(CairoFont font)
 
             tickListenerId = capi.Event.RegisterGameTickListener(_ => RefreshBeacons(), 250);
 
-            capi.ShowChatMessage("[WaypointBeacon] Loaded (CGJ sentinel, matched OL/FG labels)");
         }
 
         public override void StartServerSide(ICoreServerAPI api)
@@ -642,6 +618,7 @@ private float TryGetCairoFontPx(CairoFont font)
                 .RegisterMessageType<WbSetPinnedPacket>()
                 .RegisterMessageType<WbRequestPinsPacket>()
                 .RegisterMessageType<WbPinsSyncPacket>()
+                .RegisterMessageType<WbBaselineInitPacket>()
                 .RegisterMessageType<WbCreateWaypointPacket>();
 
             serverChannel.SetMessageHandler<WbSetPinnedPacket>((player, pkt) =>
@@ -659,12 +636,16 @@ private float TryGetCairoFontPx(CairoFont font)
                 HandleCreateWaypointPacket(api, player, pkt);
             });
 
+            serverChannel.SetMessageHandler<WbBaselineInitPacket>((player, pkt) =>
+            {
+                HandleBaselineInitPacket(api, player);
+            });
+
             // Push saved pins to players when they join (small delay so channel is ready)
             api.Event.PlayerJoin += (IServerPlayer p) =>
             {
                 api.Event.RegisterCallback(_ => SendPinsToPlayer(api, p), 50);
             };
-            api.Logger.Notification("[WaypointBeacon] ServerSide loaded, channel registered");
 
         }
 
@@ -2669,10 +2650,32 @@ private float TryGetCairoFontPx(CairoFont font)
         // Waypoint enumeration helpers
         // ---------------------------
 
+
+        private bool IsBaselineInitializedForPlayer(ICoreServerAPI sapi, IServerPlayer player)
+        {
+            try
+            {
+                string attrKey = BaselineAttrKeyPrefix + sapi.World.Seed.ToString();
+                return player?.Entity?.WatchedAttributes?.GetBool(attrKey, false) == true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void HandleBaselineInitPacket(ICoreServerAPI sapi, IServerPlayer player)
+        {
+            try
+            {
+                string attrKey = BaselineAttrKeyPrefix + sapi.World.Seed.ToString();
+                player?.Entity?.WatchedAttributes?.SetBool(attrKey, true);
+            }
+            catch { }
+        }
+
         private void HandleSetPinnedPacket(ICoreServerAPI sapi, IServerPlayer player, WbSetPinnedPacket pkt)
         {
-            sapi.Logger.Notification("[WaypointBeacon] Server got beacon request: id={0} pinned={1} title={2}", pkt.WaypointId, pkt.Pinned, pkt.Title);
-
             try
             {
                 // Persist overrides inside the player's watched attributes (saved with player data)
@@ -2908,7 +2911,10 @@ private float TryGetCairoFontPx(CairoFont font)
                 string attrKey = PinsAttrKeyPrefix + sapi.World.Seed.ToString();
                 var dict = LoadPinsFromPlayer(player, attrKey);
 
-                var pkt = new WbPinsSyncPacket();
+                var pkt = new WbPinsSyncPacket
+                {
+                    BaselineInitialized = IsBaselineInitializedForPlayer(sapi, player)
+                };
                 foreach (var kv in dict)
                 {
                     pkt.Keys.Add(kv.Key);
@@ -2928,6 +2934,8 @@ private float TryGetCairoFontPx(CairoFont font)
             try
             {
                 beaconOverrides.Clear();
+                serverBaselineInitialized = pkt?.BaselineInitialized == true;
+                pinsSyncReceived = true;
 
                 int n = Math.Min(pkt?.Keys?.Count ?? 0, pkt?.Pinned?.Count ?? 0);
                 for (int i = 0; i < n; i++)
@@ -3805,23 +3813,14 @@ private static double Clamp(double v, double lo, double hi)
                         transpiler: new HarmonyMethod(patcherType.GetMethod(nameof(ComposeDialog_Transpiler), BindingFlags.Static | BindingFlags.Public)),
                         postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_GuiDialogEditWayPoint_ComposeDialog), BindingFlags.Static | BindingFlags.Public))
                     );
-                    api.Logger.Warning("[WaypointBeacon] Patched {0}.ComposeDialog (inject + init).", EditDlg);
-                }
-                else
-                {
-                    api.Logger.Warning("[WaypointBeacon] Could not find {0}.ComposeDialog to patch.", EditDlg);
                 }
 
                 var editOnSave = typeof(GuiDialogEditWayPoint).GetMethod("onSave", BindingFlags.Instance | BindingFlags.NonPublic);
                 if (editOnSave != null)
                 {
                     harmony.Patch(editOnSave, postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_GuiDialogEditWayPoint_onSave), BindingFlags.Static | BindingFlags.Public)));
-                    api.Logger.Warning("[WaypointBeacon] Patched {0}.onSave (persist).", EditDlg);
                 }
-                else
-                {
-                    api.Logger.Warning("[WaypointBeacon] Could not find {0}.onSave to patch.", EditDlg);
-                }
+
 
                 // ---- ADD dialog ----
                 var addCompose = typeof(GuiDialogAddWayPoint).GetMethod("ComposeDialog", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -3831,25 +3830,16 @@ private static double Clamp(double v, double lo, double hi)
                         transpiler: new HarmonyMethod(patcherType.GetMethod(nameof(ComposeDialog_Transpiler), BindingFlags.Static | BindingFlags.Public)),
                         postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_GuiDialogAddWayPoint_ComposeDialog), BindingFlags.Static | BindingFlags.Public))
                     );
-                    api.Logger.Warning("[WaypointBeacon] Patched {0}.ComposeDialog (inject + init).", AddDlg);
                 }
-                else
-                {
-                    api.Logger.Warning("[WaypointBeacon] Could not find {0}.ComposeDialog to patch.", AddDlg);
-                }
+
 
                 var addOnSave = typeof(GuiDialogAddWayPoint).GetMethod("onSave", BindingFlags.Instance | BindingFlags.NonPublic);
                 if (addOnSave != null)
                 {
                     harmony.Patch(addOnSave, prefix: new HarmonyMethod(patcherType.GetMethod(nameof(Pre_GuiDialogAddWayPoint_onSave), BindingFlags.Static | BindingFlags.Public)), postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_GuiDialogAddWayPoint_onSave), BindingFlags.Static | BindingFlags.Public)));
-                    api.Logger.Warning("[WaypointBeacon] Patched {0}.onSave (persist + remember default).", AddDlg);
-                }
-                else
-                {
-                    api.Logger.Warning("[WaypointBeacon] Could not find {0}.onSave to patch.", AddDlg);
                 }
 
-                api.Logger.Warning("[WaypointBeacon] Beacon UI hook ACTIVE (Edit/Add waypoint dialogs via transpiler).");
+
             }
             catch (Exception e)
             {
