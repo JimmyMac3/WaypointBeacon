@@ -2014,7 +2014,6 @@ private float TryGetCairoFontPx(CairoFont font)
         {
             try
             {
-                capi?.Logger?.Notification("[WaypointBeacon] Beacon Manager hotkey pressed ({0})", comb?.ToString() ?? "unknown");
 
                 // Reliable toggle: don't use TryClose() as an "is open" test.
                 // We track open/closed via the dialog's OnGuiOpened/OnGuiClosed callbacks.
