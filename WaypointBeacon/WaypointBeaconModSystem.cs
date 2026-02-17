@@ -140,8 +140,8 @@ namespace WaypointBeacon
 
         // Track waypoints we've seen this session so we can apply the default beacon setting only to newly created waypoints
         private readonly HashSet<string> seenWaypointKeys = new HashSet<string>();
-        private bool seenWaypointKeysInitialized;
-
+        private bool worldBaselinePrepared;
+        private long clientStartMs;
 
         private const string PinsAttrKeyPrefix = "waypointbeacon:pins:";
 
@@ -162,6 +162,7 @@ namespace WaypointBeacon
             public bool DefaultNewWaypointBeaconOn = true;
             public bool GlobalBeaconsEnabled = true;
             public bool BeamsEnabled = true;
+            public List<string> BeaconBaselineInitializedWorlds = new List<string>();
         }
 
         private WaypointBeaconClientConfig clientConfig = new WaypointBeaconClientConfig();
@@ -478,6 +479,79 @@ private float TryGetCairoFontPx(CairoFont font)
         }
 
 
+        private string GetCurrentWorldBaselineKey()
+        {
+            try
+            {
+                object world = capi?.World;
+                if (world == null) return null;
+
+                var worldType = world.GetType();
+                var seedProp = worldType.GetProperty("Seed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (seedProp != null)
+                {
+                    object seedObj = seedProp.GetValue(world);
+                    if (seedObj != null)
+                    {
+                        string seed = Convert.ToString(seedObj, System.Globalization.CultureInfo.InvariantCulture);
+                        if (!string.IsNullOrWhiteSpace(seed)) return "seed:" + seed;
+                    }
+                }
+
+                int mapSizeX = capi?.World?.BlockAccessor?.MapSizeX ?? 0;
+                int mapSizeZ = capi?.World?.BlockAccessor?.MapSizeZ ?? 0;
+                return $"mapsize:{mapSizeX}x{mapSizeZ}";
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void EnsureWorldBeaconBaselinePrepared()
+        {
+            if (worldBaselinePrepared) return;
+
+            if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
+            if (clientConfig.BeaconBaselineInitializedWorlds == null)
+            {
+                clientConfig.BeaconBaselineInitializedWorlds = new List<string>();
+            }
+
+            if (!TryGetWaypointList(out _, out System.Collections.IList waypointList)) return;
+            if ((waypointList?.Count ?? 0) == 0 && Environment.TickCount64 - clientStartMs < 5000) return;
+
+            string worldKey = GetCurrentWorldBaselineKey();
+            bool firstTimeInWorld = !string.IsNullOrEmpty(worldKey)
+                && !clientConfig.BeaconBaselineInitializedWorlds.Contains(worldKey);
+
+            seenWaypointKeys.Clear();
+
+            foreach (var wp in EnumerateWaypoints())
+            {
+                if (!TryGetWaypointPos(wp, out double x, out double y, out double z)) continue;
+                string name = TryGetString(wp, "Title", "title", "Name", "name", "Text", "text") ?? "";
+                string bKey = MakePinKey(x, y, z, name);
+                if (string.IsNullOrEmpty(bKey)) continue;
+
+                seenWaypointKeys.Add(bKey);
+
+                if (firstTimeInWorld && !beaconOverrides.ContainsKey(bKey))
+                {
+                    beaconOverrides[bKey] = false;
+                }
+            }
+
+            worldBaselinePrepared = true;
+
+            if (!string.IsNullOrEmpty(worldKey) && firstTimeInWorld)
+            {
+                clientConfig.BeaconBaselineInitializedWorlds.Add(worldKey);
+                try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
+            }
+        }
+
+
         internal static void TrySetButtonText(GuiElementTextButton btn, string text)
         {
             if (btn == null) return;
@@ -514,6 +588,9 @@ private float TryGetCairoFontPx(CairoFont font)
             {
                 clientConfig = new WaypointBeaconClientConfig();
             }
+            worldBaselinePrepared = false;
+            clientStartMs = Environment.TickCount64;
+
             clientChannel = capi.Network
                 .RegisterChannel("waypointbeacon")
                 .RegisterMessageType<WbSetPinnedPacket>()
@@ -2012,6 +2089,8 @@ private float TryGetCairoFontPx(CairoFont font)
             string fLower = f.ToLowerInvariant();
 
 
+            EnsureWorldBeaconBaselinePrepared();
+
             var list = new List<WaypointRow>();
 
             foreach (var wp in EnumerateWaypoints())
@@ -2036,28 +2115,16 @@ private float TryGetCairoFontPx(CairoFont font)
 
                 // Seed an override once per waypoint so vanilla pin changes won't change beacon state later
                 string bKey = MakePinKey(x, y, z, name);
+                if (string.IsNullOrEmpty(bKey)) continue;
 
-                // Detect waypoints that appear after we've established the initial set (covers auto-created waypoints by other mods)
-                bool isNewThisSession = false;
-                if (!seenWaypointKeysInitialized)
-                {
-                    seenWaypointKeys.Add(bKey);
-                }
-                else
-                {
-                    // HashSet.Add returns true if it was not already present
-                    isNewThisSession = seenWaypointKeys.Add(bKey);
-                }
+                bool isNewThisSession = seenWaypointKeys.Add(bKey);
 
                 if (!beaconOverrides.ContainsKey(bKey))
                 {
-                    bool seedOn = false;
+                    bool seedOn = isNewThisSession && DefaultNewWaypointBeaconOn;
 
-                    // Only apply the default to waypoints that are newly created after initial snapshot.
-                    if (seenWaypointKeysInitialized && isNewThisSession && DefaultNewWaypointBeaconOn)
+                    if (seedOn)
                     {
-                        seedOn = true;
-
                         // Persist to server so the beacon state survives reloads (and works in multiplayer)
                         try
                         {
@@ -2405,10 +2472,7 @@ private float TryGetCairoFontPx(CairoFont font)
 
                 if (!GlobalBeaconsEnabled) return;
 
-                bool captureInitialSeen = !seenWaypointKeysInitialized;
-
-
-
+                EnsureWorldBeaconBaselinePrepared();
 
                 var player = capi.World?.Player;
                 var ent = player?.Entity;
@@ -2436,22 +2500,14 @@ private float TryGetCairoFontPx(CairoFont font)
                     // We seed an override once per waypoint (first time we see it) so that later vanilla pin changes
                     // do NOT affect beacon state.
                     string bKey = MakePinKey(x, y, z, name);
-                    // If another mod created a new waypoint (without the Add dialog), apply the default beacon setting
-                    // once when we first notice it. Manual waypoint creation is handled by our Add dialog onSave patch,
-                    // which writes an explicit override and will therefore not be overwritten here.
-                    if (captureInitialSeen)
+                    if (string.IsNullOrEmpty(bKey)) continue;
+
+                    bool isNewThisSession = seenWaypointKeys.Add(bKey);
+                    if (isNewThisSession && DefaultNewWaypointBeaconOn && !beaconOverrides.ContainsKey(bKey))
                     {
-                        seenWaypointKeys.Add(bKey);
-                    }
-                    else if (!seenWaypointKeys.Contains(bKey))
-                    {
-                        seenWaypointKeys.Add(bKey);
-                        if (DefaultNewWaypointBeaconOn && !beaconOverrides.ContainsKey(bKey))
-                        {
-                            SetBeaconOnForWaypointObject(wp, true);
-                            // ensure local cache reflects it immediately
-                            beaconOverrides[bKey] = true;
-                        }
+                        SetBeaconOnForWaypointObject(wp, true);
+                        // ensure local cache reflects it immediately
+                        beaconOverrides[bKey] = true;
                     }
 
                     if (!beaconOverrides.ContainsKey(bKey))
@@ -2484,9 +2540,6 @@ private float TryGetCairoFontPx(CairoFont font)
                         ColorRgba = rgba
                     });
                 }
-                // After the first successful refresh, any newly discovered waypoint will be treated as 'new' for default-beacon purposes
-                if (!seenWaypointKeysInitialized) seenWaypointKeysInitialized = true;
-
             }
             catch (Exception e)
             {
