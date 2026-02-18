@@ -587,10 +587,10 @@ private float TryGetCairoFontPx(CairoFont font)
                 requestedPins = true;
                 clientChannel.SendPacket(new WbRequestPinsPacket());
             }, 500);
-            capi.Input.RegisterHotKey("waypointbeacon-togglebeacons", "Beacon Manager", GlKeys.K, HotkeyType.GUIOrOtherControls);
+            capi.Input.RegisterHotKey("waypointbeacon-togglebeacons", "[Waypoint Beacon] Beacon Manager", GlKeys.K, HotkeyType.GUIOrOtherControls);
             capi.Input.SetHotKeyHandler("waypointbeacon-togglebeacons", OnToggleBeacons);
 
-            capi.Input.RegisterHotKey("addbeaconwaypoint", "Add Beacon at Pointed Block", GlKeys.B, HotkeyType.GUIOrOtherControls);
+            capi.Input.RegisterHotKey("addbeaconwaypoint", "[Waypoint Beacon] Add Waypoint (where you're looking)", GlKeys.B, HotkeyType.GUIOrOtherControls);
             capi.Input.SetHotKeyHandler("addbeaconwaypoint", OnAddBeaconWaypointHotkey);
 
             // Patch vanilla waypoint dialog to show a Beacon toggle companion dialog (1.21.6)
