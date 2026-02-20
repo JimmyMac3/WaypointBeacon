@@ -5,7 +5,7 @@
     "name": "The Waypoint Beacon Mod",
     "authors": [ "JimmyMac3" ],
     "description": "Your map knows. Your eyes can too - 3D beacons for waypoints",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "dependencies": { "game": "1.21.0" },
     "side": "Universal"
 }
