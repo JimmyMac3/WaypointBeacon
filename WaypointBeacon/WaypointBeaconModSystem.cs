@@ -341,6 +341,11 @@ private float TryGetCairoFontPx(CairoFont font)
             SetGlobalBeaconsEnabled(!GlobalBeaconsEnabled);
         }
 
+        public void ToggleBeamsEnabled()
+        {
+            SetBeamsEnabled(!BeamsEnabled);
+        }
+
         // ---- Configurable max render distance ----
         /// <summary>Minimum allowed value for the beacon render distance slider (blocks XZ).</summary>
         public int MinRenderDistance => 250;
@@ -589,6 +594,9 @@ private float TryGetCairoFontPx(CairoFont font)
             }, 500);
             capi.Input.RegisterHotKey("waypointbeacon-togglebeacons", "[Waypoint Beacon] Beacon Manager", GlKeys.K, HotkeyType.GUIOrOtherControls);
             capi.Input.SetHotKeyHandler("waypointbeacon-togglebeacons", OnToggleBeacons);
+
+            capi.Input.RegisterHotKey("waypointbeacon-togglebeams", "[Waypoint Beacon] Toggle Beams", GlKeys.J, HotkeyType.GUIOrOtherControls);
+            capi.Input.SetHotKeyHandler("waypointbeacon-togglebeams", OnToggleBeamsHotkey);
 
             capi.Input.RegisterHotKey("addbeaconwaypoint", "[Waypoint Beacon] Add Waypoint (where you're looking)", GlKeys.B, HotkeyType.GUIOrOtherControls);
             capi.Input.SetHotKeyHandler("addbeaconwaypoint", OnAddBeaconWaypointHotkey);
@@ -2046,6 +2054,21 @@ private float TryGetCairoFontPx(CairoFont font)
             catch (Exception e)
             {
                 capi?.Logger?.Error("[WaypointBeacon] Failed to toggle Beacon Manager: {0}", e);
+            }
+
+            return true;
+        }
+
+        private bool OnToggleBeamsHotkey(KeyCombination comb)
+        {
+            try
+            {
+                ToggleBeamsEnabled();
+                capi?.ShowChatMessage(BeamsEnabled ? "Beacon Beams On" : "Beacon Beams Off");
+            }
+            catch (Exception e)
+            {
+                capi?.Logger?.Error("[WaypointBeacon] Failed to toggle beams hotkey: {0}", e);
             }
 
             return true;
