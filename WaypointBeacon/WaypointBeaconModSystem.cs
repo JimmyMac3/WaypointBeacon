@@ -595,7 +595,7 @@ private float TryGetCairoFontPx(CairoFont font)
             capi.Input.RegisterHotKey("waypointbeacon-togglebeacons", "[Waypoint Beacon] Beacon Manager", GlKeys.K, HotkeyType.GUIOrOtherControls);
             capi.Input.SetHotKeyHandler("waypointbeacon-togglebeacons", OnToggleBeacons);
 
-            capi.Input.RegisterHotKey("waypointbeacon-togglebeams", "[Waypoint Beacon] Toggle Beams", GlKeys.J, HotkeyType.GUIOrOtherControls);
+            capi.Input.RegisterHotKey("waypointbeacon-togglebeams", "[Waypoint Beacon] Toggle Beams", GlKeys.L, HotkeyType.GUIOrOtherControls);
             capi.Input.SetHotKeyHandler("waypointbeacon-togglebeams", OnToggleBeamsHotkey);
 
             capi.Input.RegisterHotKey("addbeaconwaypoint", "[Waypoint Beacon] Add Waypoint (where you're looking)", GlKeys.B, HotkeyType.GUIOrOtherControls);
