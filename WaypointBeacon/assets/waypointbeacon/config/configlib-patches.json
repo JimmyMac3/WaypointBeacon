@@ -1,0 +1,105 @@
+{
+  "config": "waypointbeacon.json",
+  "title": "Waypoint Beacon",
+  "category": "Waypoint Beacon",
+  "entries": [
+    {
+      "path": "LabelFontSize",
+      "type": "int",
+      "name": "Label Font Size",
+      "description": "Scale for waypoint label text. 0 is very small and 100 is largest.",
+      "default": 80,
+      "min": 0,
+      "max": 100,
+      "step": 1
+    },
+    {
+      "path": "LabelStyleMode",
+      "type": "int",
+      "name": "Label Style",
+      "description": "0 = Label Only, 1 = Label + Distance, 2 = Label + Coordinates.",
+      "default": 1,
+      "min": 0,
+      "max": 2,
+      "step": 1
+    },
+    {
+      "path": "ShowLabelsMode",
+      "type": "int",
+      "name": "Show Labels",
+      "description": "0 = Always, 1 = Never, 2 = Auto Hide.",
+      "default": 2,
+      "min": 0,
+      "max": 2,
+      "step": 1
+    },
+    {
+      "path": "renderDistance",
+      "type": "int",
+      "name": "Render Distance",
+      "description": "Current beacon render distance in blocks.",
+      "default": 1000,
+      "min": 250,
+      "max": 50000,
+      "step": 10
+    },
+    {
+      "path": "maxRenderDistance",
+      "type": "int",
+      "name": "Max Render Distance",
+      "description": "Upper limit for the Render Distance slider in blocks.",
+      "default": 1000,
+      "min": 250,
+      "max": 50000,
+      "step": 10
+    },
+    {
+      "path": "NearBeaconFadeOut",
+      "type": "bool",
+      "name": "Near Beacon Fade-out",
+      "description": "Fade beacons when the player gets close to them.",
+      "default": true
+    },
+    {
+      "path": "NearFadeStartBlocks",
+      "type": "double",
+      "name": "Near Fade Start",
+      "description": "Distance (blocks) where near-fade begins.",
+      "default": 25.0,
+      "min": 1.0,
+      "max": 200.0,
+      "step": 1.0
+    },
+    {
+      "path": "NearFadeEndBlocks",
+      "type": "double",
+      "name": "Near Fade End",
+      "description": "Distance (blocks) where beacon is fully faded out.",
+      "default": 10.0,
+      "min": 0.0,
+      "max": 200.0,
+      "step": 1.0
+    },
+    {
+      "path": "DefaultNewWaypointBeaconOn",
+      "type": "bool",
+      "name": "New Waypoint = Beacon",
+      "description": "If enabled, newly-created waypoints default to beacon enabled.",
+      "default": true
+    },
+    {
+      "path": "GlobalBeaconsEnabled",
+      "type": "bool",
+      "name": "Hide All Beacons",
+      "description": "Master toggle for rendering all beacons (true = visible).",
+      "default": true
+    },
+    {
+      "path": "BeamsEnabled",
+      "type": "bool",
+      "name": "Show Beams",
+      "description": "Toggle vertical beam rendering for active beacons.",
+      "default": true
+    }
+  ]
+}
