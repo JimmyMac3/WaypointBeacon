@@ -2,6 +2,7 @@
 
 using Cairo;
 using System;
+using System.Reflection;
 using System.Reflection.Emit;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
@@ -32,7 +33,7 @@ namespace WaypointBeacon
             this.onOpened = onOpened;
             // Load max distance from mod config
             this.minBeaconRenderDist = mod?.MinRenderDistance ?? 250;
-            this.maxBeaconRenderDist = mod?.MaxRenderDistance ?? 1000;
+            this.maxBeaconRenderDist = mod?.MaxRenderDistance ?? 20000;
             if (this.maxBeaconRenderDist < this.minBeaconRenderDist) this.maxBeaconRenderDist = this.minBeaconRenderDist;
         }
 
@@ -71,6 +72,9 @@ namespace WaypointBeacon
             const int width = 600;
             const int height = 550;
 
+            string beaconManagerKey = GetHotkeyDisplay("waypointbeacon-togglebeacons", "K");
+            string showBeamsKey = GetHotkeyDisplay("waypointbeacon-togglebeams", "L");
+
             ElementBounds dialogBounds = ElementBounds.Fixed(0, 0, width, height)
                 .WithAlignment(EnumDialogArea.CenterMiddle);
 
@@ -79,7 +83,7 @@ namespace WaypointBeacon
             SingleComposer?.Dispose();
             SingleComposer = api.Gui.CreateCompo("waypointbeacon-beaconmanager", dialogBounds)
                 .AddDialogBG(bgBounds, true)
-                .AddDialogTitleBar("Beacon Manager (K)", OnClose);
+                .AddDialogTitleBar($"Beacon Manager ({beaconManagerKey})", OnClose);
 
             // Layout
             int pad = 18;
@@ -106,14 +110,14 @@ namespace WaypointBeacon
                 new[] { "Always", "Never", "Auto Hide" }, mod?.ShowLabelsMode ?? 0, 300,
                 "Always: All labels, all the time. Maximum information. Maximum clutter. No regrets.\n\nNever: Shhh. Labels are forbidden. Your eyes may finally rest.\n\nAuto Hide: Only shows the label youre aiming at. Like a spotlight for your crosshair.\n\nDefault=Auto Hide");
             AddSliderRow("Max Render Distance", "bm-maxrender", labelFont, pad, labelW, ctrlX, ctrlW, ref y, rowH, rowGap, OnMaxRenderDistanceChanged, 300,
-                "Beacon-Vision.\nCrank it up for superhero sight\nOr turn it down and save your eyeballs.\nMax can be changed in config.\n\nDefault=1000 blocks.");
+                "Beacon-Vision.\nCrank it up for superhero sight\nOr turn it down and save your eyeballs.\n\nRange: 250-20000 blocks.\nDefault=10000 blocks.");
             AddSwitchRow("Near Beacon Fade-out", "bm-fadenear", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnNearFadeChanged, 300,
                 "Beacons get shy the closer you get.\nFade distance can be changed in config.\n\nDefault=On.");
             AddSwitchRow("New Waypoint = Beacon", "bm-newwp", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnNewWaypointBeaconChanged, 300,
                 "Turn waypoints into glorious sky lasers.\nOff=They stay shy and normal.\n(Auto Map Markers friendly)\n\nDefault=On.");
             AddSwitchRow("Hide All Beacons", "bm-hideall", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnHideAllBeaconsChanged, 200,
                 "Panic button! Nuke it all!\nThis just temporarily stops the mod from rendering stuff.\n\nDefault=Off");
-            AddSwitchRow("Show Beams", "bm-showbeams", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnShowBeamsChanged, 220,
+            AddSwitchRow($"Show Beams ({showBeamsKey})", "bm-showbeams", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnShowBeamsChanged, 220,
                 "Sky lasers on/off.\nOff=Labels only.\nOn=Full I live here now mode.\n\nDefault=On");
 
             // Bottom buttons
@@ -217,6 +221,59 @@ namespace WaypointBeacon
             int blocks = (int)Math.Round(minBeaconRenderDist + (maxBeaconRenderDist - minBeaconRenderDist) * t);
             blocks = (int)(Math.Round(blocks / 10.0) * 10);
             return Math.Max(minBeaconRenderDist, Math.Min(blocks, maxBeaconRenderDist));
+        }
+
+        private string GetHotkeyDisplay(string code, string fallback)
+        {
+            try
+            {
+                object input = api?.Input;
+                if (input == null) return fallback;
+
+                var inputType = input.GetType();
+                var getByCode = inputType.GetMethod("GetHotKeyByCode", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                object hotkey = getByCode?.Invoke(input, new object[] { code });
+                if (hotkey == null) return fallback;
+
+                object mapping =
+                    TryGetMember(hotkey, "CurrentMapping") ??
+                    TryGetMember(hotkey, "currentMapping") ??
+                    TryGetMember(hotkey, "KeyCombination") ??
+                    TryGetMember(hotkey, "keyCombination") ??
+                    TryGetMember(hotkey, "DefaultMapping") ??
+                    TryGetMember(hotkey, "defaultMapping");
+
+                string text = mapping?.ToString();
+                if (!string.IsNullOrWhiteSpace(text)) return text;
+
+                return fallback;
+            }
+            catch
+            {
+                return fallback;
+            }
+        }
+
+        private static object TryGetMember(object obj, string memberName)
+        {
+            if (obj == null || string.IsNullOrEmpty(memberName)) return null;
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            Type t = obj.GetType();
+
+            try
+            {
+                var p = t.GetProperty(memberName, flags);
+                if (p != null && p.CanRead) return p.GetValue(obj, null);
+
+                var f = t.GetField(memberName, flags);
+                if (f != null) return f.GetValue(obj);
+            }
+            catch
+            {
+            }
+
+            return null;
         }
 
         private int BlocksToSlider(int blocks)
