@@ -1,0 +1,90 @@
+{
+  "version": 0,
+  "file": "waypointbeacon.json",
+  "patches": {},
+  "settings": [
+    {
+      "code": "LabelFontSize",
+	  "comment": "Scale for waypoint label text. 0 is very small and 100 is largest.",
+      "type": "integer",
+      "default": 80
+	  "range": {
+        "min": 0,
+        "max": 100,
+		"step": 1
+      }
+    },
+    {
+      "code": "LabelStyleMode",
+	  "comment": "0 = Label Only, 1 = Label + Distance, 2 = Label + Coordinates.",
+      "type": "integer",
+      "default": 1
+	  "mapping": {
+        "Label Only": 0,
+        "Label + Distance": 1,
+		"Label + Coordinates": 2
+      }
+    },
+	{
+      "code": "ShowLabelsMode",
+	  "comment": "0 = Always, 1 = Never, 2 = Auto Hide.",
+      "type": "integer",
+      "default": 2
+	  "mapping": {
+        "Always": 0,
+        "Never": 1,
+		"Auto Hide": 2
+      }
+    },
+	{
+      "code": "maxRenderDistance",
+	  "comment": "Upper limit for the Render Distance slider in blocks.",
+      "type": "integer",
+      "default": 1000
+	  "range": {
+        "min": 1000,
+        "max": 50000,
+		"step": 10
+      }
+    },
+	{
+      "code": "NearBeaconFadeOut",
+	  "comment": "Enable fade out of beacons as you get closer to them.",
+      "type": "boolean",
+      "default": true
+    },
+	{
+      "code": "NearFadeStartBlocks",
+	  "name": "Near_Fade_Start",      
+      "comment": "Distance from beacon where near-fade begins. This should be larger than Near Fade End",
+      "type": "integer",
+      "default": 25	  
+    },
+	{
+      "code": "NearFadeEndBlocks",
+	  "name": "Near_Fade_End",      
+      "comment": "Distance from beacon where it is fully faded out.",
+      "type": "integer",
+      "default": 10	  
+    },
+	{
+      "code": "DefaultNewWaypointBeaconOn",
+	  "comment": "If enabled, newly-created waypoints default to beacon enabled.",
+      "type": "boolean",
+      "default": true	  
+    },
+	{
+      "code": "GlobalBeaconsEnabled",
+	  "name": "Beacon_render_engine_enabled",
+      "comment": "Sets the beacon render engine on or off.",
+      "type": "boolean",
+      "default": true
+    },
+	{
+      "code": "BeamsEnabled",
+	  "comment": "Enabled = Show Beams, Disabled = Show labels only.",
+      "type": "boolean",
+      "default": true
+    }
+  ]
+}
