@@ -3137,29 +3137,37 @@ private float TryGetCairoFontPx(CairoFont font)
             var mapManager = capi.ModLoader.GetModSystem<WorldMapManager>();
             if (mapManager?.MapLayers == null) yield break;
 
-            var layer = mapManager.MapLayers.FirstOrDefault(l => l != null && l.GetType().Name.IndexOf("WaypointMapLayer", StringComparison.OrdinalIgnoreCase) >= 0);
-            if (layer == null) yield break;
-
-            object[] candidates =
-            {
-                TryGetMember(layer, "ownWaypoints"),
-                TryGetMember(layer, "OwnWaypoints"),
-                TryGetMember(layer, "waypoints"),
-                TryGetMember(layer, "Waypoints"),
-                TryGetMember(layer, "sharedWaypoints"),
-                TryGetMember(layer, "SharedWaypoints")
-            };
-
             var yielded = new HashSet<object>();
-            foreach (var listObj in candidates)
-            {
-                if (listObj is not IEnumerable enumerable) continue;
 
-                foreach (var wp in enumerable)
+            foreach (var layer in mapManager.MapLayers)
+            {
+                if (layer == null) continue;
+
+                string ln = layer.GetType().Name;
+                if (ln.IndexOf("waypoint", StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+                object[] candidates =
                 {
-                    if (wp == null) continue;
-                    if (!yielded.Add(wp)) continue;
-                    yield return wp;
+                    TryGetMember(layer, "ownWaypoints"),
+                    TryGetMember(layer, "OwnWaypoints"),
+                    TryGetMember(layer, "waypoints"),
+                    TryGetMember(layer, "Waypoints"),
+                    TryGetMember(layer, "sharedWaypoints"),
+                    TryGetMember(layer, "SharedWaypoints"),
+                    TryGetMember(layer, "clientWaypoints"),
+                    TryGetMember(layer, "ClientWaypoints")
+                };
+
+                foreach (var listObj in candidates)
+                {
+                    if (!(listObj is IEnumerable enumerable)) continue;
+
+                    foreach (var wp in enumerable)
+                    {
+                        if (wp == null) continue;
+                        if (!yielded.Add(wp)) continue;
+                        yield return wp;
+                    }
                 }
             }
         }
@@ -3863,6 +3871,28 @@ private static double Clamp(double v, double lo, double hi)
                 }
 
 
+                // ---- Cartographer shared edit dialog (optional) ----
+                Type cartographerEditType = FindTypeByFullName("NB.Cartographer.GuiDialogEditSharedWayPoint");
+                if (cartographerEditType != null)
+                {
+                    var cCompose = cartographerEditType.GetMethod("ComposeDialog", BindingFlags.Instance | BindingFlags.NonPublic);
+                    if (cCompose != null)
+                    {
+                        harmony.Patch(cCompose,
+                            transpiler: new HarmonyMethod(patcherType.GetMethod(nameof(ComposeDialog_Transpiler), BindingFlags.Static | BindingFlags.Public)),
+                            postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_ExternalEditWayPoint_ComposeDialog), BindingFlags.Static | BindingFlags.Public))
+                        );
+                    }
+
+                    var cOnSave = cartographerEditType.GetMethod("onSave", BindingFlags.Instance | BindingFlags.NonPublic);
+                    if (cOnSave != null)
+                    {
+                        harmony.Patch(cOnSave,
+                            postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_ExternalEditWayPoint_onSave), BindingFlags.Static | BindingFlags.Public))
+                        );
+                    }
+                }
+
             }
             catch (Exception e)
             {
@@ -3873,6 +3903,22 @@ private static double Clamp(double v, double lo, double hi)
         public static void Dispose()
         {
             try { harmony?.UnpatchAll("waypointbeacon.waypointdialog.beaconswitch"); } catch { }
+        }
+
+        private static Type FindTypeByFullName(string fullName)
+        {
+            if (string.IsNullOrEmpty(fullName)) return null;
+            try
+            {
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    Type t = asm.GetType(fullName, false);
+                    if (t != null) return t;
+                }
+            }
+            catch { }
+
+            return null;
         }
 
         private static void OnBeaconToggled(bool on)
@@ -3961,6 +4007,60 @@ private static double Clamp(double v, double lo, double hi)
             catch (Exception e)
             {
                 capi?.Logger?.Warning("[WaypointBeacon] Edit onSave persist failed: {0}", e);
+            }
+        }
+
+        // Optional external shared-edit dialogs (e.g. Cartographer)
+        public static void Post_ExternalEditWayPoint_ComposeDialog(object __instance)
+        {
+            try
+            {
+                if (__instance == null || mod == null) return;
+                GuiComposer composer = TryGetComposer(__instance);
+                if (composer == null) return;
+
+                object wpObj = TryGetWaypointObject(__instance);
+                if (wpObj == null) return;
+
+                bool on = mod.GetBeaconOnForWaypointObject(wpObj);
+                TrySetSwitchState(composer, BeaconSwitchKey, on);
+            }
+            catch { }
+        }
+
+        public static void Post_ExternalEditWayPoint_onSave(object __instance)
+        {
+            try
+            {
+                if (__instance == null || mod == null) return;
+                GuiComposer composer = TryGetComposer(__instance);
+                if (composer == null) return;
+
+                bool? shared = TryGetSwitchStateNullable(composer, "sharedSwitch");
+                if (shared == true) return;
+
+                object wpObj = TryGetWaypointObject(__instance);
+                if (wpObj == null) return;
+
+                bool? on = TryGetSwitchStateNullable(composer, BeaconSwitchKey);
+                if (on.HasValue)
+                {
+                    mod.SetBeaconOnForWaypointObject(wpObj, on.Value);
+                }
+            }
+            catch { }
+        }
+
+        private static GuiComposer TryGetComposer(object dialog)
+        {
+            if (dialog == null) return null;
+            try
+            {
+                return TryGetMember(dialog, "SingleComposer") as GuiComposer;
+            }
+            catch
+            {
+                return null;
             }
         }
 
