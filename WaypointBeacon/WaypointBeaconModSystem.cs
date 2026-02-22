@@ -3990,11 +3990,6 @@ private static double Clamp(double v, double lo, double hi)
             {
                 if (__instance?.SingleComposer == null || mod == null) return;
 
-                // Cartographer compatibility: if waypoint is being shared, do not
-                // overwrite beacon state from this save cycle.
-                bool? shared = TryGetSwitchStateNullable(__instance.SingleComposer, "sharedSwitch");
-                if (shared == true) return;
-
                 object wpObj = TryGetWaypointObject(__instance);
                 if (wpObj == null) return;
 
@@ -4035,9 +4030,6 @@ private static double Clamp(double v, double lo, double hi)
                 if (__instance == null || mod == null) return;
                 GuiComposer composer = TryGetComposer(__instance);
                 if (composer == null) return;
-
-                bool? shared = TryGetSwitchStateNullable(composer, "sharedSwitch");
-                if (shared == true) return;
 
                 object wpObj = TryGetWaypointObject(__instance);
                 if (wpObj == null) return;
@@ -4105,15 +4097,6 @@ private static double Clamp(double v, double lo, double hi)
             try
             {
                 if (__instance?.SingleComposer == null || mod == null) return;
-
-                // Cartographer compatibility: when Share is enabled, skip beacon
-                // override mutation to avoid cross-mod state clobbering.
-                bool? shared = TryGetSwitchStateNullable(__instance.SingleComposer, "sharedSwitch");
-                if (shared == true)
-                {
-                    addBeforeKeys = null;
-                    return;
-                }
 
                 bool? on = TryGetSwitchStateNullable(__instance.SingleComposer, BeaconSwitchKey);
                 if (!on.HasValue)
