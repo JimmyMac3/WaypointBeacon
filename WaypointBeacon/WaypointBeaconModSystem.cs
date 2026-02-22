@@ -3937,8 +3937,11 @@ private static double Clamp(double v, double lo, double hi)
                 object wpObj = TryGetWaypointObject(__instance);
                 if (wpObj == null) return;
 
-                bool on = TryGetSwitchState(__instance.SingleComposer, BeaconSwitchKey);
-                mod.SetBeaconOnForWaypointObject(wpObj, on);
+                bool? on = TryGetSwitchStateNullable(__instance.SingleComposer, BeaconSwitchKey);
+                if (on.HasValue)
+                {
+                    mod.SetBeaconOnForWaypointObject(wpObj, on.Value);
+                }
             }
             catch (Exception e)
             {
@@ -3988,10 +3991,15 @@ private static double Clamp(double v, double lo, double hi)
             {
                 if (__instance?.SingleComposer == null || mod == null) return;
 
-                bool on = TryGetSwitchState(__instance.SingleComposer, BeaconSwitchKey);
+                bool? on = TryGetSwitchStateNullable(__instance.SingleComposer, BeaconSwitchKey);
+                if (!on.HasValue)
+                {
+                    addBeforeKeys = null;
+                    return;
+                }
 
                 // Apply to the newly created waypoint (it may appear in the list a tick later)
-                if (TryApplyBeaconToNewlyCreatedWaypoint(on))
+                if (TryApplyBeaconToNewlyCreatedWaypoint(on.Value))
                 {
                     addBeforeKeys = null;
                     return;
@@ -3999,7 +4007,7 @@ private static double Clamp(double v, double lo, double hi)
 
                 if (capi != null)
                 {
-                    capi.Event.RegisterCallback(_ => RetryApplyNewWaypoint(on, 0), 10);
+                    capi.Event.RegisterCallback(_ => RetryApplyNewWaypoint(on.Value, 0), 10);
                 }
             }
             catch (Exception e)
@@ -4191,12 +4199,12 @@ private static double Clamp(double v, double lo, double hi)
         }
 
         // ---- Switch helpers (reflection-safe across VS versions) ----
-        private static bool TryGetSwitchState(GuiComposer composer, string key)
+        private static bool? TryGetSwitchStateNullable(GuiComposer composer, string key)
         {
             try
             {
                 object sw = composer.GetSwitch(key);
-                if (sw == null) return false;
+                if (sw == null) return null;
 
                 var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
                 var pOn = sw.GetType().GetProperty("On", flags);
@@ -4206,7 +4214,12 @@ private static double Clamp(double v, double lo, double hi)
                 if (fOn != null) return (bool)fOn.GetValue(sw);
             }
             catch { }
-            return false;
+            return null;
+        }
+
+        private static bool TryGetSwitchState(GuiComposer composer, string key)
+        {
+            return TryGetSwitchStateNullable(composer, key) ?? false;
         }
 
         private static void TrySetSwitchState(GuiComposer composer, string key, bool on)
