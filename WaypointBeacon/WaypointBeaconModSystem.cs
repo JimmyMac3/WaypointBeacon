@@ -2845,12 +2845,13 @@ private float TryGetCairoFontPx(CairoFont font)
 
         private static string MakePinKey(double x, double y, double z, string title)
         {
-            // Round to block coords to avoid float noise
+            // Round to block coords to avoid float noise.
+            // Intentionally ignore title so other mods changing title/share metadata
+            // do not remap an existing beacon override to a different key.
             int xi = (int)Math.Round(x);
             int yi = (int)Math.Round(y);
             int zi = (int)Math.Round(z);
-            title = title ?? "";
-            return $"{xi},{yi},{zi}|{title}";
+            return $"{xi},{yi},{zi}";
         }
 
         private Dictionary<string, bool> LoadPinsFromPlayer(IServerPlayer player, string attrKey)
@@ -4194,8 +4195,7 @@ private static double Clamp(double v, double lo, double hi)
             int xi = (int)Math.Round(x);
             int yi = (int)Math.Round(y);
             int zi = (int)Math.Round(z);
-            title = title ?? "";
-            return $"{xi},{yi},{zi}|{title}";
+            return $"{xi},{yi},{zi}";
         }
 
         // ---- Switch helpers (reflection-safe across VS versions) ----
