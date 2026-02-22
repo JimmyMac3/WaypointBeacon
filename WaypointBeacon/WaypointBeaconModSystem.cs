@@ -3140,17 +3140,26 @@ private float TryGetCairoFontPx(CairoFont font)
             var layer = mapManager.MapLayers.FirstOrDefault(l => l != null && l.GetType().Name.IndexOf("WaypointMapLayer", StringComparison.OrdinalIgnoreCase) >= 0);
             if (layer == null) yield break;
 
-            object listObj =
-                TryGetMember(layer, "ownWaypoints") ??
-                TryGetMember(layer, "OwnWaypoints") ??
-                TryGetMember(layer, "waypoints") ??
-                TryGetMember(layer, "Waypoints");
-
-            if (listObj is IEnumerable enumerable)
+            object[] candidates =
             {
+                TryGetMember(layer, "ownWaypoints"),
+                TryGetMember(layer, "OwnWaypoints"),
+                TryGetMember(layer, "waypoints"),
+                TryGetMember(layer, "Waypoints"),
+                TryGetMember(layer, "sharedWaypoints"),
+                TryGetMember(layer, "SharedWaypoints")
+            };
+
+            var yielded = new HashSet<object>();
+            foreach (var listObj in candidates)
+            {
+                if (listObj is not IEnumerable enumerable) continue;
+
                 foreach (var wp in enumerable)
                 {
-                    if (wp != null) yield return wp;
+                    if (wp == null) continue;
+                    if (!yielded.Add(wp)) continue;
+                    yield return wp;
                 }
             }
         }
@@ -4094,7 +4103,9 @@ private static double Clamp(double v, double lo, double hi)
                     TryGetMember(layer, "ownWaypoints") ??
                     TryGetMember(layer, "OwnWaypoints") ??
                     TryGetMember(layer, "waypoints") ??
-                    TryGetMember(layer, "Waypoints");
+                    TryGetMember(layer, "Waypoints") ??
+                    TryGetMember(layer, "sharedWaypoints") ??
+                    TryGetMember(layer, "SharedWaypoints");
 
                 list = listObj as System.Collections.IList;
                 return list != null;
