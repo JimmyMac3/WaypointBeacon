@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <OutputPath>bin\$(Configuration)\Mods\mod</OutputPath>
     <Nullable>enable</Nullable>
@@ -65,7 +65,7 @@
 
 <Target Name="PostBuildDeployToModsFolder" AfterTargets="Build">
   <PropertyGroup>
-    <ModDeployDir>$(APPDATA)\VintagestoryData\Mods\WaypointBeacon\</ModDeployDir>
+    <ModDeployDir>D:\VintagestoryPreData\Mods\WaypointBeacon\</ModDeployDir>
   </PropertyGroup>
 
   <ItemGroup>
