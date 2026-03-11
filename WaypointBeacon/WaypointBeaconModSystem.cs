@@ -545,6 +545,7 @@ private float TryGetCairoFontPx(CairoFont font)
         {
             capi = api;
 
+            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.1 runtime-compat build");
 
             try
             {
