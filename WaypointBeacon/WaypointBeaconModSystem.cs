@@ -663,7 +663,7 @@ private float TryGetCairoFontPx(CairoFont font)
 
 
                 BlockPos rawTarget = capi.World.Player.CurrentBlockSelection?.Position
-                    ?? capi.World.Player.Entity.Pos.AsBlockPos;
+                    ?? GetPlayerBlockPos(capi?.World?.Player);
 
                 BlockPos target = NormalizeTargetBlockPos(rawTarget);
                 string title = $"Map Point {nextMapPointNumber++}";
@@ -755,8 +755,8 @@ private float TryGetCairoFontPx(CairoFont font)
             int z = NormalizeWrappedCoord(target.Z, mapSizeZ);
 
             // Prefer the wrapped coordinate nearest to the player's actual position.
-            double? playerX = capi?.World?.Player?.Entity?.Pos?.X;
-            double? playerZ = capi?.World?.Player?.Entity?.Pos?.Z;
+            double? playerX = TryGetPlayerCoordinate(capi?.World?.Player, true);
+            double? playerZ = TryGetPlayerCoordinate(capi?.World?.Player, false);
             x = ResolveClosestWrappedCoord(x, playerX, mapSizeX);
             z = ResolveClosestWrappedCoord(z, playerZ, mapSizeZ);
 
@@ -2472,8 +2472,7 @@ private float TryGetCairoFontPx(CairoFont font)
                 var ent = player?.Entity;
                 if (ent == null) return;
 
-                double px = ent.Pos.X;
-                double pz = ent.Pos.Z;
+                if (!TryGetEntityPos(ent, out double px, out _, out double pz)) return;
 
                 foreach (var wp in EnumerateWaypoints())
                 {
@@ -2582,9 +2581,11 @@ private float TryGetCairoFontPx(CairoFont font)
                 var plr = capi?.World?.Player?.Entity;
                 if (plr != null)
                 {
-                    double dx = b.X - plr.Pos.X;
-                    double dy = b.Y - plr.Pos.Y;
-                    double dz = b.Z - plr.Pos.Z;
+                    if (!TryGetEntityPos(plr, out double plrX, out double plrY, out double plrZ)) return name;
+
+                    double dx = b.X - plrX;
+                    double dy = b.Y - plrY;
+                    double dz = b.Z - plrZ;
                     double dist = Math.Sqrt(dx * dx + dy * dy + dz * dz);
 
                     // Quantize to reduce texture churn
@@ -3172,6 +3173,90 @@ private float TryGetCairoFontPx(CairoFont font)
             }
         }
 
+        private static BlockPos GetPlayerBlockPos(IClientPlayer player)
+        {
+            if (player == null) return new BlockPos(0, 0, 0);
+            if (TryGetEntityPos(player.Entity, out double x, out double y, out double z))
+            {
+                return new BlockPos((int)Math.Floor(x), (int)Math.Floor(y), (int)Math.Floor(z));
+            }
+
+            return new BlockPos(0, 0, 0);
+        }
+
+        private static double? TryGetPlayerCoordinate(IClientPlayer player, bool xAxis)
+        {
+            if (player == null) return null;
+            if (!TryGetEntityPos(player.Entity, out double x, out _, out double z)) return null;
+            return xAxis ? x : z;
+        }
+
+        private static double GetPlayerPitchRadians(IClientPlayer player)
+        {
+            if (player?.Entity == null) return 0;
+
+            object posObj =
+                TryGetMember(player.Entity, "Pos") ??
+                TryGetMember(player.Entity, "pos") ??
+                TryGetMember(player.Entity, "Position") ??
+                TryGetMember(player.Entity, "position") ??
+                TryGetMember(player.Entity, "SidedPos") ??
+                TryGetMember(player.Entity, "sidedPos") ??
+                TryGetMember(player.Entity, "ServerPos") ??
+                TryGetMember(player.Entity, "serverPos");
+
+            if (posObj == null) return 0;
+
+            double? pitch = TryGetDouble(posObj, "Pitch", "pitch");
+            return pitch ?? 0;
+        }
+
+        private static bool TryGetEntityPos(object entity, out double x, out double y, out double z)
+        {
+            x = y = z = 0;
+            if (entity == null) return false;
+
+            object posObj =
+                TryGetMember(entity, "Pos") ??
+                TryGetMember(entity, "pos") ??
+                TryGetMember(entity, "Position") ??
+                TryGetMember(entity, "position") ??
+                TryGetMember(entity, "SidedPos") ??
+                TryGetMember(entity, "sidedPos") ??
+                TryGetMember(entity, "ServerPos") ??
+                TryGetMember(entity, "serverPos");
+
+            if (posObj is Vec3d v3d)
+            {
+                x = v3d.X;
+                y = v3d.Y;
+                z = v3d.Z;
+                return true;
+            }
+
+            if (posObj is Vec3f v3f)
+            {
+                x = v3f.X;
+                y = v3f.Y;
+                z = v3f.Z;
+                return true;
+            }
+
+            double? xx = TryGetDouble(posObj, "X", "x");
+            double? yy = TryGetDouble(posObj, "Y", "y");
+            double? zz = TryGetDouble(posObj, "Z", "z");
+
+            if (xx.HasValue && yy.HasValue && zz.HasValue)
+            {
+                x = xx.Value;
+                y = yy.Value;
+                z = zz.Value;
+                return true;
+            }
+
+            return false;
+        }
+
         private static object TryGetMember(object obj, string name)
         {
             var t = obj.GetType();
@@ -3493,18 +3578,21 @@ private float TryGetCairoFontPx(CairoFont font)
                     {
                         if (lastDistancePos == null)
                         {
-                            lastDistancePos = new Vec3d(ent.Pos.X, ent.Pos.Y, ent.Pos.Z);
+                            if (!TryGetEntityPos(ent, out double entX, out double entY, out double entZ)) return;
+                            lastDistancePos = new Vec3d(entX, entY, entZ);
                         }
                         else
                         {
-                            double dx = ent.Pos.X - lastDistancePos.X;
-                            double dy = ent.Pos.Y - lastDistancePos.Y;
-                            double dz = ent.Pos.Z - lastDistancePos.Z;
+                            if (!TryGetEntityPos(ent, out double entX, out double entY, out double entZ)) return;
+
+                            double dx = entX - lastDistancePos.X;
+                            double dy = entY - lastDistancePos.Y;
+                            double dz = entZ - lastDistancePos.Z;
 
                             if ((dx * dx + dy * dy + dz * dz) > 1.0)
                             {
                                 DisposeAllTextures();
-                                lastDistancePos.Set(ent.Pos.X, ent.Pos.Y, ent.Pos.Z);
+                                lastDistancePos.Set(entX, entY, entZ);
                             }
                         }
                     }
@@ -3565,7 +3653,7 @@ var beacons = mod.GetVisibleBeacons();
                         // VS pitch convention is typically +down, so invert to get +up.
                         const double aimMarginDeg = 0.5;
                         double aimMarginRad = aimMarginDeg * (Math.PI / 180.0);
-                        double pitchRad = capi.World.Player.Entity.Pos.Pitch;
+                        double pitchRad = GetPlayerPitchRadians(capi?.World?.Player);
                         if (Math.Abs(pitchRad) > Math.PI * 1.1)
                         {
                             pitchRad *= (Math.PI / 180.0);
@@ -4199,6 +4287,90 @@ private static double Clamp(double v, double lo, double hi)
             }
         }
 
+
+        private static BlockPos GetPlayerBlockPos(IClientPlayer player)
+        {
+            if (player == null) return new BlockPos(0, 0, 0);
+            if (TryGetEntityPos(player.Entity, out double x, out double y, out double z))
+            {
+                return new BlockPos((int)Math.Floor(x), (int)Math.Floor(y), (int)Math.Floor(z));
+            }
+
+            return new BlockPos(0, 0, 0);
+        }
+
+        private static double? TryGetPlayerCoordinate(IClientPlayer player, bool xAxis)
+        {
+            if (player == null) return null;
+            if (!TryGetEntityPos(player.Entity, out double x, out _, out double z)) return null;
+            return xAxis ? x : z;
+        }
+
+        private static double GetPlayerPitchRadians(IClientPlayer player)
+        {
+            if (player?.Entity == null) return 0;
+
+            object posObj =
+                TryGetMember(player.Entity, "Pos") ??
+                TryGetMember(player.Entity, "pos") ??
+                TryGetMember(player.Entity, "Position") ??
+                TryGetMember(player.Entity, "position") ??
+                TryGetMember(player.Entity, "SidedPos") ??
+                TryGetMember(player.Entity, "sidedPos") ??
+                TryGetMember(player.Entity, "ServerPos") ??
+                TryGetMember(player.Entity, "serverPos");
+
+            if (posObj == null) return 0;
+
+            double? pitch = TryGetDouble(posObj, "Pitch", "pitch");
+            return pitch ?? 0;
+        }
+
+        private static bool TryGetEntityPos(object entity, out double x, out double y, out double z)
+        {
+            x = y = z = 0;
+            if (entity == null) return false;
+
+            object posObj =
+                TryGetMember(entity, "Pos") ??
+                TryGetMember(entity, "pos") ??
+                TryGetMember(entity, "Position") ??
+                TryGetMember(entity, "position") ??
+                TryGetMember(entity, "SidedPos") ??
+                TryGetMember(entity, "sidedPos") ??
+                TryGetMember(entity, "ServerPos") ??
+                TryGetMember(entity, "serverPos");
+
+            if (posObj is Vec3d v3d)
+            {
+                x = v3d.X;
+                y = v3d.Y;
+                z = v3d.Z;
+                return true;
+            }
+
+            if (posObj is Vec3f v3f)
+            {
+                x = v3f.X;
+                y = v3f.Y;
+                z = v3f.Z;
+                return true;
+            }
+
+            double? xx = TryGetDouble(posObj, "X", "x");
+            double? yy = TryGetDouble(posObj, "Y", "y");
+            double? zz = TryGetDouble(posObj, "Z", "z");
+
+            if (xx.HasValue && yy.HasValue && zz.HasValue)
+            {
+                x = xx.Value;
+                y = yy.Value;
+                z = zz.Value;
+                return true;
+            }
+
+            return false;
+        }
 
         private static object TryGetMember(object obj, string name)
         {
