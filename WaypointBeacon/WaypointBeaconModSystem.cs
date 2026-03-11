@@ -3207,7 +3207,7 @@ private float TryGetCairoFontPx(CairoFont font)
 
             if (posObj == null) return 0;
 
-            double? pitch = TryGetDouble(posObj, "Pitch", "pitch");
+            double? pitch = WaypointBeaconModSystem.TryGetDouble(posObj, "Pitch", "pitch");
             return pitch ?? 0;
         }
 
@@ -4322,7 +4322,7 @@ private static double Clamp(double v, double lo, double hi)
 
             if (posObj == null) return 0;
 
-            double? pitch = TryGetDouble(posObj, "Pitch", "pitch");
+            double? pitch = WaypointBeaconModSystem.TryGetDouble(posObj, "Pitch", "pitch");
             return pitch ?? 0;
         }
 
@@ -4357,9 +4357,9 @@ private static double Clamp(double v, double lo, double hi)
                 return true;
             }
 
-            double? xx = TryGetDouble(posObj, "X", "x");
-            double? yy = TryGetDouble(posObj, "Y", "y");
-            double? zz = TryGetDouble(posObj, "Z", "z");
+            double? xx = WaypointBeaconModSystem.TryGetDouble(posObj, "X", "x");
+            double? yy = WaypointBeaconModSystem.TryGetDouble(posObj, "Y", "y");
+            double? zz = WaypointBeaconModSystem.TryGetDouble(posObj, "Z", "z");
 
             if (xx.HasValue && yy.HasValue && zz.HasValue)
             {
