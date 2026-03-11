@@ -65,7 +65,7 @@
 
 <Target Name="PostBuildDeployToModsFolder" AfterTargets="Build">
   <PropertyGroup>
-    <ModDeployDir>$(APPDATA)\VintagestoryData\Mods\WaypointBeacon\</ModDeployDir>
+    <ModDeployDir>D:\VintagestoryPreData\Mods\WaypointBeacon\</ModDeployDir>
   </PropertyGroup>
 
   <ItemGroup>
