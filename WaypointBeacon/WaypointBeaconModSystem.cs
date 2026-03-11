@@ -3207,7 +3207,7 @@ private float TryGetCairoFontPx(CairoFont font)
 
             if (posObj == null) return 0;
 
-            double? pitch = WaypointBeaconModSystem.TryGetDouble(posObj, "Pitch", "pitch");
+            double? pitch = TryGetDouble(posObj, "Pitch", "pitch");
             return pitch ?? 0;
         }
 
@@ -4322,7 +4322,7 @@ private static double Clamp(double v, double lo, double hi)
 
             if (posObj == null) return 0;
 
-            double? pitch = WaypointBeaconModSystem.TryGetDouble(posObj, "Pitch", "pitch");
+            double? pitch = TryGetDoubleFrom(posObj, "Pitch", "pitch");
             return pitch ?? 0;
         }
 
@@ -4357,9 +4357,9 @@ private static double Clamp(double v, double lo, double hi)
                 return true;
             }
 
-            double? xx = WaypointBeaconModSystem.TryGetDouble(posObj, "X", "x");
-            double? yy = WaypointBeaconModSystem.TryGetDouble(posObj, "Y", "y");
-            double? zz = WaypointBeaconModSystem.TryGetDouble(posObj, "Z", "z");
+            double? xx = TryGetDoubleFrom(posObj, "X", "x");
+            double? yy = TryGetDoubleFrom(posObj, "Y", "y");
+            double? zz = TryGetDoubleFrom(posObj, "Z", "z");
 
             if (xx.HasValue && yy.HasValue && zz.HasValue)
             {
@@ -4434,6 +4434,22 @@ private static double Clamp(double v, double lo, double hi)
 
             // Fallback: direct X/Y/Z on waypoint
             return TryGetXYZ(wp, out x, out y, out z);
+        }
+
+        private static double? TryGetDoubleFrom(object obj, params string[] names)
+        {
+            if (obj == null || names == null) return null;
+
+            foreach (string n in names)
+            {
+                object m = TryGetMember(obj, n);
+                if (m is double d) return d;
+                if (m is float f) return f;
+                if (m is int i) return i;
+                if (m is long l) return l;
+            }
+
+            return null;
         }
 
         private static string TryGetStringFrom(object obj, params string[] names)
