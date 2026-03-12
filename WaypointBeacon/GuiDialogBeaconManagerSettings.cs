@@ -2,6 +2,7 @@
 
 using Cairo;
 using System;
+using System.IO;
 using System.Reflection;
 using System.Reflection.Emit;
 using Vintagestory.API.Client;
@@ -65,6 +66,58 @@ namespace WaypointBeacon
             onClosed?.Invoke();
         }
 
+
+        private string GetModDisplayVersion()
+        {
+            try
+            {
+                object loader = api?.ModLoader;
+                if (loader != null)
+                {
+                    var getMod = loader.GetType().GetMethod("GetMod", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(string) }, null);
+                    object modObj = getMod?.Invoke(loader, new object[] { "waypointbeacon" });
+                    if (modObj != null)
+                    {
+                        object info = TryGetMember(modObj, "Info") ?? TryGetMember(modObj, "ModInfo");
+                        object verObj = TryGetMember(info, "Version") ?? TryGetMember(modObj, "Version");
+                        string ver = verObj?.ToString();
+                        if (!string.IsNullOrWhiteSpace(ver)) return ver;
+                    }
+                }
+            }
+            catch
+            {
+                // ignore and try file fallback
+            }
+
+            try
+            {
+                string modInfoPath = Path.Combine(AppContext.BaseDirectory, "Mods", "WaypointBeacon", "modinfo.json");
+                if (File.Exists(modInfoPath))
+                {
+                    string json = File.ReadAllText(modInfoPath);
+                    const string key = "\"version\"";
+                    int idx = json.IndexOf(key, StringComparison.OrdinalIgnoreCase);
+                    if (idx >= 0)
+                    {
+                        int colon = json.IndexOf(':', idx);
+                        int q1 = json.IndexOf('"', colon + 1);
+                        int q2 = json.IndexOf('"', q1 + 1);
+                        if (q1 >= 0 && q2 > q1)
+                        {
+                            return json.Substring(q1 + 1, q2 - q1 - 1);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+
+            return "unknown";
+        }
+
         private void OnClose() => TryClose();
 
         private void Compose()
@@ -96,8 +149,11 @@ namespace WaypointBeacon
 
             CairoFont labelFont = CairoFont.WhiteSmallishText();
 
-            SingleComposer.AddStaticText("                  The Waypoint Beacon Mod. Version 1.0\nYour map knows. Your eyes can too - 3D beacons for waypoints",
-                labelFont, ElementBounds.Fixed(14, y, width - pad, rowH * 2), "Welcome-lbl");
+            string modVersion = GetModDisplayVersion();
+            string welcomeText = $"The Waypoint Beacon Mod. Version {modVersion}\nYour map knows. Your eyes can too - 3D beacons for waypoints";
+            SingleComposer.AddStaticText(welcomeText,
+                labelFont, ElementBounds.Fixed(14, y, width - (pad * 2), rowH * 2), "Welcome-lbl", EnumTextOrientation.Center);
+
            
             y += rowH * 2 + rowGap;
 
