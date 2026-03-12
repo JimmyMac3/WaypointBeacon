@@ -152,7 +152,7 @@ namespace WaypointBeacon
             string modVersion = GetModDisplayVersion();
             string welcomeText = $"The Waypoint Beacon Mod. Version {modVersion}\nYour map knows. Your eyes can too - 3D beacons for waypoints";
             SingleComposer.AddStaticText(welcomeText,
-                labelFont, EnumTextOrientation.Center, ElementBounds.Fixed(14, y, width - (pad * 2), rowH * 2), "Welcome-lbl");
+                labelFont, EnumTextOrientation.Center, ElementBounds.Fixed(10, y, width - 20, rowH * 2), "Welcome-lbl");
 
            
             y += rowH * 2 + rowGap;
