@@ -92,7 +92,7 @@ namespace WaypointBeacon
 
             try
             {
-                string modInfoPath = Path.Combine(AppContext.BaseDirectory, "Mods", "WaypointBeacon", "modinfo.json");
+                string modInfoPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Mods", "WaypointBeacon", "modinfo.json");
                 if (File.Exists(modInfoPath))
                 {
                     string json = File.ReadAllText(modInfoPath);
@@ -152,7 +152,7 @@ namespace WaypointBeacon
             string modVersion = GetModDisplayVersion();
             string welcomeText = $"The Waypoint Beacon Mod. Version {modVersion}\nYour map knows. Your eyes can too - 3D beacons for waypoints";
             SingleComposer.AddStaticText(welcomeText,
-                labelFont, ElementBounds.Fixed(14, y, width - (pad * 2), rowH * 2), "Welcome-lbl", EnumTextOrientation.Center);
+                labelFont, EnumTextOrientation.Center, ElementBounds.Fixed(14, y, width - (pad * 2), rowH * 2), "Welcome-lbl");
 
            
             y += rowH * 2 + rowGap;
