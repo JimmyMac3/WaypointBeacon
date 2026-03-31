@@ -1,0 +1,14 @@
+{
+  "$schema": "https://moddbcdn.vintagestory.at/schema/modinfo.latest.json",
+  "type": "code",
+  "modid": "subtleparticlesplus",
+  "name": "Subtle Particles Plus",
+  "authors": ["JimmyMac"],
+  "description": "Client addon for Particles Plus that applies subtle/default particle config automatically.",
+  "version": "1.0.0",
+  "dependencies": {
+    "game": "1.21.0",
+    "particlesplus": "2.4.0"
+  },
+  "side": "client"
+}
