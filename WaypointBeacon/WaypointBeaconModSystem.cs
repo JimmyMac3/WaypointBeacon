@@ -545,7 +545,7 @@ private float TryGetCairoFontPx(CairoFont font)
         {
             capi = api;
 
-            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.9 runtime-compat build");
+            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.10 runtime-compat build");
 
             try
             {
@@ -4218,11 +4218,18 @@ private static double Clamp(double v, double lo, double hi)
             {
                 if (__instance?.SingleComposer == null || mod == null) return;
 
-                bool? on = TryGetSwitchStateNullable(__instance.SingleComposer, BeaconSwitchKey);
+                // Priority order:
+                // 1) last add-dialog toggle callback state (user intent while editing this dialog)
+                // 2) direct switch state read from composer
+                // 3) manager default
+                bool? on = addDialogBeaconStateValid ? addDialogBeaconState : (bool?)null;
                 if (!on.HasValue)
                 {
-                    // Fallback order: last toggled add-dialog state, then configured default.
-                    on = addDialogBeaconStateValid ? addDialogBeaconState : mod.AddDialogBeaconChoice;
+                    on = TryGetSwitchStateNullable(__instance.SingleComposer, BeaconSwitchKey);
+                }
+                if (!on.HasValue)
+                {
+                    on = mod.AddDialogBeaconChoice;
                 }
 
                 // Apply to the newly created waypoint (it may appear in the list a tick later)
