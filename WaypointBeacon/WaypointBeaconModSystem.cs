@@ -545,7 +545,7 @@ private float TryGetCairoFontPx(CairoFont font)
         {
             capi = api;
 
-            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.8 runtime-compat build");
+            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.9 runtime-compat build");
 
             try
             {
@@ -3913,6 +3913,8 @@ private static double Clamp(double v, double lo, double hi)
         private static Harmony harmony;
         private static ICoreClientAPI capi;
         private static WaypointBeaconModSystem mod;
+        private static bool addDialogBeaconState;
+        private static bool addDialogBeaconStateValid;
 
         public static void TryPatch(ICoreClientAPI api, WaypointBeaconModSystem modSystem)
         {
@@ -3930,7 +3932,7 @@ private static double Clamp(double v, double lo, double hi)
                 if (editCompose != null)
                 {
                     harmony.Patch(editCompose,
-                        transpiler: new HarmonyMethod(patcherType.GetMethod(nameof(ComposeDialog_Transpiler), BindingFlags.Static | BindingFlags.Public)),
+                        transpiler: new HarmonyMethod(patcherType.GetMethod(nameof(ComposeDialogEdit_Transpiler), BindingFlags.Static | BindingFlags.Public)),
                         postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_GuiDialogEditWayPoint_ComposeDialog), BindingFlags.Static | BindingFlags.Public))
                     );
                 }
@@ -3947,7 +3949,7 @@ private static double Clamp(double v, double lo, double hi)
                 if (addCompose != null)
                 {
                     harmony.Patch(addCompose,
-                        transpiler: new HarmonyMethod(patcherType.GetMethod(nameof(ComposeDialog_Transpiler), BindingFlags.Static | BindingFlags.Public)),
+                        transpiler: new HarmonyMethod(patcherType.GetMethod(nameof(ComposeDialogAdd_Transpiler), BindingFlags.Static | BindingFlags.Public)),
                         postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_GuiDialogAddWayPoint_ComposeDialog), BindingFlags.Static | BindingFlags.Public))
                     );
                 }
@@ -4012,32 +4014,52 @@ private static double Clamp(double v, double lo, double hi)
 
         private static void OnBeaconToggled(bool on)
         {
-            // no-op; we persist on save (and remember default on Add save)
+            addDialogBeaconState = on;
+            addDialogBeaconStateValid = true;
         }
 
-        public static GuiComposer AddBeaconComponent(GuiComposer composer, ref ElementBounds leftColumn, ref ElementBounds rightColumn)
+        public static GuiComposer AddBeaconComponentEdit(GuiComposer composer, ref ElementBounds leftColumn, ref ElementBounds rightColumn)
         {
-            // Called during dialog ComposeDialog (before composer.Compose runs).
-            // Match Cartographer's layout pattern: label left, switch right.
+            return composer
+                .AddStaticText(Vintagestory.API.Config.Lang.Get("Beacon"), CairoFont.WhiteSmallText(), leftColumn = leftColumn.BelowCopy(0, 9))
+                .AddSwitch(OnBeaconToggled, rightColumn = rightColumn.BelowCopy(0, 5).WithFixedWidth(28).WithFixedHeight(28), BeaconSwitchKey);
+        }
+
+        public static GuiComposer AddBeaconComponentAdd(GuiComposer composer, ref ElementBounds leftColumn, ref ElementBounds rightColumn)
+        {
             return composer
                 .AddStaticText(Vintagestory.API.Config.Lang.Get("Beacon"), CairoFont.WhiteSmallText(), leftColumn = leftColumn.BelowCopy(0, 9))
                 .AddSwitch(OnBeaconToggled, rightColumn = rightColumn.BelowCopy(0, 40).WithFixedWidth(28).WithFixedHeight(28), BeaconSwitchKey);
         }
 
+        public static IEnumerable<CodeInstruction> ComposeDialogEdit_Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            return ComposeDialog_InjectBeaconTranspiler(instructions, nameof(AddBeaconComponentEdit), "Edit");
+        }
+
+        public static IEnumerable<CodeInstruction> ComposeDialogAdd_Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            return ComposeDialog_InjectBeaconTranspiler(instructions, nameof(AddBeaconComponentAdd), "Add");
+        }
+
+        // Kept for optional external edit dialogs that should use edit-style placement.
         public static IEnumerable<CodeInstruction> ComposeDialog_Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            return ComposeDialog_InjectBeaconTranspiler(instructions, nameof(AddBeaconComponentEdit), "External/Edit");
+        }
+
+        private static IEnumerable<CodeInstruction> ComposeDialog_InjectBeaconTranspiler(IEnumerable<CodeInstruction> instructions, string injectorMethodName, string dialogTag)
         {
             bool found = false;
 
             foreach (var instruction in instructions)
             {
-                // Anchor at the existing control key used by vanilla: "waypoint-color"
                 if (instruction.opcode == System.Reflection.Emit.OpCodes.Ldstr && (string)instruction.operand == "waypoint-color")
                 {
-                    // ElementBounds locals (leftColumn/rightColumn) are locals 0 and 1 in the vanilla dialogs
                     yield return new CodeInstruction(System.Reflection.Emit.OpCodes.Ldloca_S, 0);
                     yield return new CodeInstruction(System.Reflection.Emit.OpCodes.Ldloca_S, 1);
                     yield return new CodeInstruction(System.Reflection.Emit.OpCodes.Call,
-                        typeof(WaypointDialogBeaconPatch).GetMethod(nameof(AddBeaconComponent), BindingFlags.Static | BindingFlags.Public));
+                        typeof(WaypointDialogBeaconPatch).GetMethod(injectorMethodName, BindingFlags.Static | BindingFlags.Public));
 
                     found = true;
                 }
@@ -4047,7 +4069,7 @@ private static double Clamp(double v, double lo, double hi)
 
             if (!found && capi != null)
             {
-                capi.Logger.Warning("[WaypointBeacon] Transpiler: could not find anchor Ldstr \"waypoint-color\" in ComposeDialog; beacon switch not injected.");
+                capi.Logger.Warning("[WaypointBeacon] {0} transpiler: could not find anchor Ldstr \"waypoint-color\" in ComposeDialog; beacon switch not injected.", dialogTag);
             }
         }
 
@@ -4165,6 +4187,8 @@ private static double Clamp(double v, double lo, double hi)
                 }
 
                 TrySetSwitchState(__instance.SingleComposer, BeaconSwitchKey, on);
+                addDialogBeaconState = on;
+                addDialogBeaconStateValid = true;
             }
             catch (Exception e)
             {
@@ -4197,8 +4221,8 @@ private static double Clamp(double v, double lo, double hi)
                 bool? on = TryGetSwitchStateNullable(__instance.SingleComposer, BeaconSwitchKey);
                 if (!on.HasValue)
                 {
-                    // Fallback: if UI switch failed to compose, preserve configured default for new waypoints.
-                    on = mod.AddDialogBeaconChoice;
+                    // Fallback order: last toggled add-dialog state, then configured default.
+                    on = addDialogBeaconStateValid ? addDialogBeaconState : mod.AddDialogBeaconChoice;
                 }
 
                 // Apply to the newly created waypoint (it may appear in the list a tick later)
@@ -4515,7 +4539,13 @@ private static double Clamp(double v, double lo, double hi)
                 if (pOn != null && pOn.CanRead) return (bool)pOn.GetValue(sw);
 
                 var fOn = sw.GetType().GetField("On", flags) ?? sw.GetType().GetField("on", flags);
-                if (fOn != null) return (bool)fOn.GetValue(sw);
+                if (fOn != null) return Convert.ToBoolean(fOn.GetValue(sw));
+
+                var pValue = sw.GetType().GetProperty("Value", flags);
+                if (pValue != null && pValue.CanRead) return Convert.ToBoolean(pValue.GetValue(sw));
+
+                var mGet = sw.GetType().GetMethod("GetValue", flags, null, Type.EmptyTypes, null);
+                if (mGet != null) return Convert.ToBoolean(mGet.Invoke(sw, null));
             }
             catch { }
             return null;
