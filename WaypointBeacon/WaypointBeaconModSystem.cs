@@ -545,7 +545,7 @@ private float TryGetCairoFontPx(CairoFont font)
         {
             capi = api;
 
-            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.3 runtime-compat build");
+            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.7 runtime-compat build");
 
             try
             {
@@ -4021,7 +4021,7 @@ private static double Clamp(double v, double lo, double hi)
             // Match Cartographer's layout pattern: label left, switch right.
             return composer
                 .AddStaticText(Vintagestory.API.Config.Lang.Get("Beacon"), CairoFont.WhiteSmallText(), leftColumn = leftColumn.BelowCopy(0, 9))
-                .AddSwitch(OnBeaconToggled, rightColumn = rightColumn.BelowCopy(0, 5).WithFixedWidth(28).WithFixedHeight(28), BeaconSwitchKey);
+                .AddSwitch(OnBeaconToggled, rightColumn = rightColumn.BelowCopy(0, 14).WithFixedWidth(28).WithFixedHeight(28), BeaconSwitchKey);
         }
 
         public static IEnumerable<CodeInstruction> ComposeDialog_Transpiler(IEnumerable<CodeInstruction> instructions)
