@@ -215,6 +215,10 @@ namespace WaypointBeacon
             bool nearFade = mod?.NearBeaconFadeOutEnabled ?? false;
             try { SingleComposer.GetSwitch("bm-fadenear").SetValue(nearFade); } catch { }
 
+            // Suggest Saved default switch (vanilla Add Waypoint helper)
+            bool suggestSaved = mod?.SuggestSavedDefault ?? false;
+            try { SingleComposer.GetSwitch("bm-suggestsaved").SetValue(suggestSaved); } catch { }
+
             // (Icons are always shown)
         }
 
@@ -244,6 +248,11 @@ namespace WaypointBeacon
         private void OnShowBeamsChanged(bool on)
         {
             mod?.SetBeamsEnabled(on);
+        }
+
+        private void OnSuggestSavedDefaultChanged(bool on)
+        {
+            mod?.SetSuggestSavedDefault(on);
         }
 
         private bool OnEnableAllBeacons()

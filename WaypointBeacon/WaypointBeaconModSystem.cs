@@ -173,6 +173,7 @@ namespace WaypointBeacon
             public bool DefaultNewWaypointBeaconOn = true;
             public bool GlobalBeaconsEnabled = true;
             public bool BeamsEnabled = true;
+            public bool SuggestSavedDefault = false;
         }
 
         private WaypointBeaconClientConfig clientConfig = new WaypointBeaconClientConfig();
@@ -181,6 +182,8 @@ namespace WaypointBeacon
 
 
         public bool BeamsEnabled => clientConfig?.BeamsEnabled ?? true;
+
+        public bool SuggestSavedDefault => clientConfig?.SuggestSavedDefault ?? false;
 
         public bool ShowIconsInLabels => true;
 
@@ -335,6 +338,14 @@ private float TryGetCairoFontPx(CairoFont font)
             // No need to rebuild visible beacons; beam renderer reads this flag each frame.
         }
 
+
+
+        public void SetSuggestSavedDefault(bool enabled)
+        {
+            if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
+            clientConfig.SuggestSavedDefault = enabled;
+            try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
+        }
 
 
         public void ToggleGlobalBeaconsEnabled()
@@ -551,7 +562,7 @@ private float TryGetCairoFontPx(CairoFont font)
         {
             capi = api;
 
-            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.14 runtime-compat build");
+            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.15 runtime-compat build");
 
             try
             {
@@ -3941,6 +3952,7 @@ private static double Clamp(double v, double lo, double hi)
         private const string AddDlg = "Vintagestory.GameContent.GuiDialogAddWayPoint";
 
         private const string BeaconSwitchKey = "wbBeaconSwitch";
+        private static readonly string[] SuggestSavedSwitchKeys = { "suggestsaved", "suggestSaved", "waypoint-suggestsaved", "waypoint-suggestSaved", "wpsuggestsaved", "suggest-save" };
 
         private static Harmony harmony;
         private static ICoreClientAPI capi;
@@ -4211,6 +4223,8 @@ private static double Clamp(double v, double lo, double hi)
 
                 // Add dialog starts OFF by default; user choice in this dialog is authoritative.
                 bool on = false;
+                TryApplySuggestSavedDefault(__instance.SingleComposer);
+
                 object sw = __instance.SingleComposer.GetSwitch(BeaconSwitchKey);
                 if (sw == null)
                 {
@@ -4220,7 +4234,7 @@ private static double Clamp(double v, double lo, double hi)
 
                 TrySetSwitchState(__instance.SingleComposer, BeaconSwitchKey, on);
                 addDialogBeaconState = on;
-                addDialogBeaconStateValid = true;
+                addDialogBeaconStateValid = false;
             }
             catch (Exception e)
             {
@@ -4254,10 +4268,10 @@ private static double Clamp(double v, double lo, double hi)
                 // 1) last add-dialog toggle callback state (user intent while editing this dialog)
                 // 2) direct switch state read from composer
                 // 3) OFF by default (no Beacon Manager override in Add dialog)
-                bool? on = addDialogBeaconStateValid ? addDialogBeaconState : (bool?)null;
-                if (!on.HasValue)
+                bool? on = TryGetSwitchStateNullable(__instance.SingleComposer, BeaconSwitchKey);
+                if (!on.HasValue && addDialogBeaconStateValid)
                 {
-                    on = TryGetSwitchStateNullable(__instance.SingleComposer, BeaconSwitchKey);
+                    on = addDialogBeaconState;
                 }
                 if (!on.HasValue)
                 {
@@ -4566,6 +4580,26 @@ private static double Clamp(double v, double lo, double hi)
             int yi = (int)Math.Round(y);
             int zi = (int)Math.Round(z);
             return $"{xi},{yi},{zi}";
+        }
+
+        private static void TryApplySuggestSavedDefault(GuiComposer composer)
+        {
+            if (composer == null || mod == null) return;
+
+            bool desired = mod.SuggestSavedDefault;
+            foreach (string key in SuggestSavedSwitchKeys)
+            {
+                try
+                {
+                    object sw = composer.GetSwitch(key);
+                    if (sw == null) continue;
+                    TrySetSwitchState(composer, key, desired);
+                    return;
+                }
+                catch
+                {
+                }
+            }
         }
 
         // ---- Switch helpers (reflection-safe across VS versions) ----
