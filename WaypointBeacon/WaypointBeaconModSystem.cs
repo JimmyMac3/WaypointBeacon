@@ -551,7 +551,7 @@ private float TryGetCairoFontPx(CairoFont font)
         {
             capi = api;
 
-            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.13 runtime-compat build");
+            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.14 runtime-compat build");
 
             try
             {
@@ -2247,6 +2247,8 @@ private float TryGetCairoFontPx(CairoFont font)
 
             try
             {
+                var liveKeys = new HashSet<string>();
+
                 foreach (var wp in EnumerateWaypoints())
                 {
                     if (wp == null) continue;
@@ -2502,6 +2504,8 @@ private float TryGetCairoFontPx(CairoFont font)
                     string bKey = MakePinKey(x, y, z, name);
                     if (string.IsNullOrEmpty(bKey)) continue;
 
+                    liveKeys.Add(bKey);
+
                     bool isNewThisSession = seenWaypointKeys.Add(bKey);
                     if (isNewThisSession && !beaconOverrides.ContainsKey(bKey))
                     {
@@ -2546,6 +2550,8 @@ private float TryGetCairoFontPx(CairoFont font)
                         ColorRgba = rgba
                     });
                 }
+
+                PruneDeletedWaypointState(liveKeys);
             }
             catch (Exception e)
             {
@@ -2866,6 +2872,25 @@ private float TryGetCairoFontPx(CairoFont font)
             int yi = (int)Math.Round(y);
             int zi = (int)Math.Round(z);
             return $"{xi},{yi},{zi}";
+        }
+
+        private void PruneDeletedWaypointState(HashSet<string> liveKeys)
+        {
+            if (liveKeys == null) return;
+
+            if (beaconOverrides.Count > 0)
+            {
+                var staleOverrideKeys = beaconOverrides.Keys.Where(k => !liveKeys.Contains(k)).ToList();
+                foreach (string stale in staleOverrideKeys)
+                {
+                    beaconOverrides.Remove(stale);
+                }
+            }
+
+            if (seenWaypointKeys.Count > 0)
+            {
+                seenWaypointKeys.RemoveWhere(k => !liveKeys.Contains(k));
+            }
         }
 
         private Dictionary<string, bool> LoadPinsFromPlayer(IServerPlayer player, string attrKey)
