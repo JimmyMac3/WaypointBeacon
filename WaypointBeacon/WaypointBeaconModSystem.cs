@@ -2247,8 +2247,6 @@ private float TryGetCairoFontPx(CairoFont font)
 
             try
             {
-                var liveKeys = new HashSet<string>();
-
                 foreach (var wp in EnumerateWaypoints())
                 {
                     if (wp == null) continue;
@@ -2482,6 +2480,8 @@ private float TryGetCairoFontPx(CairoFont font)
                 if (ent == null) return;
 
                 if (!TryGetEntityPos(ent, out double px, out _, out double pz)) return;
+
+                var liveKeys = new HashSet<string>();
 
                 foreach (var wp in EnumerateWaypoints())
                 {
