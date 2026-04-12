@@ -395,12 +395,12 @@ private float TryGetCairoFontPx(CairoFont font)
         }
 
         // Remembered default for new waypoints (Add Waypoint dialog)
-        public bool DefaultNewWaypointBeaconOn => clientConfig?.DefaultNewWaypointBeaconOn ?? false;
+        public bool DefaultNewWaypointBeaconOn => false;
 
 
 
         /// <summary>What the Add Waypoint dialog checkbox should default to.</summary>
-        public bool AddDialogBeaconChoice => clientConfig?.DefaultNewWaypointBeaconOn ?? false;
+        public bool AddDialogBeaconChoice => false;
 
         internal void SetPendingAddDialogChoice(bool on)
         {
@@ -415,14 +415,7 @@ private float TryGetCairoFontPx(CairoFont font)
 
         public void SetDefaultNewWaypointBeaconOn(bool on)
         {
-            if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
-            clientConfig.DefaultNewWaypointBeaconOn = on;
-
-            try
-            {
-                capi?.StoreModConfig(clientConfig, ClientConfigFileName);
-            }
-            catch { }
+            // Intentionally disabled: this manager setting is no longer used.
         }
 
         // --------------------------------------------------------------------
@@ -558,7 +551,7 @@ private float TryGetCairoFontPx(CairoFont font)
         {
             capi = api;
 
-            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.12 runtime-compat build");
+            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.13 runtime-compat build");
 
             try
             {
@@ -875,7 +868,7 @@ private float TryGetCairoFontPx(CairoFont font)
                     object waypointLayer = GetWaypointMapLayerObject(mapManager);
                     if (waypointLayer != null)
                     {
-                        // Respect the New Waypoint = Beacon default for chat-created waypoints.
+                        // Manager default is disabled; chat-created waypoints start with beacon OFF unless user enables later.
                         SetBeaconOnForWaypointObject(createdWaypoint, DefaultNewWaypointBeaconOn);
                         PrepareWaypointForImmediateRename(createdWaypoint);
                         if (TryOpenEditDialogForWaypoint(waypointLayer, createdWaypoint))

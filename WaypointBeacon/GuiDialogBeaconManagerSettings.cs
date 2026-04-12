@@ -169,8 +169,6 @@ namespace WaypointBeacon
                 "Beacon-Vision.\nCrank it up for superhero sight\nOr turn it down and save your eyeballs.\n\nRange: 250-20000 blocks.\nDefault=10000 blocks.");
             AddSwitchRow("Near Beacon Fade-out", "bm-fadenear", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnNearFadeChanged, 300,
                 "Beacons get shy the closer you get.\nFade distance can be changed in config.\n\nDefault=On.");
-            AddSwitchRow("New Waypoint = Beacon", "bm-newwp", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnNewWaypointBeaconChanged, 300,
-                "Turn waypoints into glorious sky lasers.\nOff=They stay shy and normal.\n(Auto Map Markers friendly)\n\nDefault=On.");
             AddSwitchRow("Hide All Beacons", "bm-hideall", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnHideAllBeaconsChanged, 200,
                 "Panic button! Nuke it all!\nThis just temporarily stops the mod from rendering stuff.\n\nDefault=Off");
             AddSwitchRow($"Show Beams ({showBeamsKey})", "bm-showbeams", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnShowBeamsChanged, 220,
@@ -208,10 +206,6 @@ namespace WaypointBeacon
             bool hideAll = !(mod?.GlobalBeaconsEnabled ?? true);
             try { SingleComposer.GetSwitch("bm-hideall").SetValue(hideAll); } catch { }
 
-            // New Waypoint Beacon switch
-            bool newWpBeacon = mod?.DefaultNewWaypointBeaconOn ?? false;
-            try { SingleComposer.GetSwitch("bm-newwp").SetValue(newWpBeacon); } catch { }
-
             // Show Beams switch
             bool showBeams = mod?.BeamsEnabled ?? true;
             try { SingleComposer.GetSwitch("bm-showbeams").SetValue(showBeams); } catch { }
@@ -240,11 +234,6 @@ namespace WaypointBeacon
         private void OnNearFadeChanged(bool on)
         {
             mod?.SetNearBeaconFadeOutEnabled(on);
-        }
-
-        private void OnNewWaypointBeaconChanged(bool on)
-        {
-            mod?.SetDefaultNewWaypointBeaconOn(on);
         }
 
         private void OnHideAllBeaconsChanged(bool hideAll)
