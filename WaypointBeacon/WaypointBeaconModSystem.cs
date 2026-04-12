@@ -147,6 +147,8 @@ namespace WaypointBeacon
 
         // Track waypoints we've seen this session so we can apply the default beacon setting only to newly created waypoints
         private readonly HashSet<string> seenWaypointKeys = new HashSet<string>();
+        private bool pendingAddDialogChoiceValid;
+        private bool pendingAddDialogChoice;
         private bool worldBaselinePrepared;
         private bool serverBaselineInitialized;
         private bool pinsSyncReceived;
@@ -400,6 +402,17 @@ private float TryGetCairoFontPx(CairoFont font)
         /// <summary>What the Add Waypoint dialog checkbox should default to.</summary>
         public bool AddDialogBeaconChoice => clientConfig?.DefaultNewWaypointBeaconOn ?? false;
 
+        internal void SetPendingAddDialogChoice(bool on)
+        {
+            pendingAddDialogChoice = on;
+            pendingAddDialogChoiceValid = true;
+        }
+
+        internal void ClearPendingAddDialogChoice()
+        {
+            pendingAddDialogChoiceValid = false;
+        }
+
         public void SetDefaultNewWaypointBeaconOn(bool on)
         {
             if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
@@ -545,7 +558,7 @@ private float TryGetCairoFontPx(CairoFont font)
         {
             capi = api;
 
-            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.11 runtime-compat build");
+            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.12 runtime-compat build");
 
             try
             {
@@ -2497,11 +2510,21 @@ private float TryGetCairoFontPx(CairoFont font)
                     if (string.IsNullOrEmpty(bKey)) continue;
 
                     bool isNewThisSession = seenWaypointKeys.Add(bKey);
-                    if (isNewThisSession && DefaultNewWaypointBeaconOn && !beaconOverrides.ContainsKey(bKey))
+                    if (isNewThisSession && !beaconOverrides.ContainsKey(bKey))
                     {
-                        SetBeaconOnForWaypointObject(wp, true);
-                        // ensure local cache reflects it immediately
-                        beaconOverrides[bKey] = true;
+                        bool seedOn;
+                        if (pendingAddDialogChoiceValid)
+                        {
+                            seedOn = pendingAddDialogChoice;
+                            pendingAddDialogChoiceValid = false;
+                        }
+                        else
+                        {
+                            seedOn = DefaultNewWaypointBeaconOn;
+                        }
+
+                        SetBeaconOnForWaypointObject(wp, seedOn);
+                        beaconOverrides[bKey] = seedOn;
                     }
 
                     if (!beaconOverrides.ContainsKey(bKey))
@@ -2517,10 +2540,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     int id = GetStableWaypointId(wp, x, y, z, name);
 
                     Vec4f rgba = ColorIntToRgba(colorInt);
-                    if (IsNearBlack(rgba))
-                    {
-                        rgba = new Vec4f(0.25f, 1f, 1f, 1f);
-                    }
 
                     visibleBeacons.Add(new BeaconInfo
                     {
@@ -3389,11 +3408,6 @@ private float TryGetCairoFontPx(CairoFont font)
             return (a << 24) | (b << 16) | (g << 8) | r;
         }
 
-        private static bool IsNearBlack(Vec4f rgba)
-        {
-            return rgba.X < 0.05f && rgba.Y < 0.05f && rgba.Z < 0.05f;
-        }
-
         public class BeaconInfo
         {
             public int Id;
@@ -4232,6 +4246,8 @@ private static double Clamp(double v, double lo, double hi)
                     on = false;
                 }
 
+                mod.SetPendingAddDialogChoice(on.Value);
+
                 // Apply to the newly created waypoint (it may appear in the list a tick later)
                 if (TryApplyBeaconToNewlyCreatedWaypoint(on.Value))
                 {
@@ -4293,6 +4309,7 @@ private static double Clamp(double v, double lo, double hi)
 
             mod.SetBeaconOnForWaypointObject(newest, on);
             mod.MarkWaypointSeen(newest);
+            mod.ClearPendingAddDialogChoice();
             return true;
         }
 
