@@ -3952,7 +3952,7 @@ private static double Clamp(double v, double lo, double hi)
         private const string AddDlg = "Vintagestory.GameContent.GuiDialogAddWayPoint";
 
         private const string BeaconSwitchKey = "wbBeaconSwitch";
-        private static readonly string[] SuggestSavedSwitchKeys = { "suggestsaved", "suggestSaved", "waypoint-suggestsaved", "waypoint-suggestSaved", "wpsuggestsaved", "suggest-save" };
+        private static readonly string[] SuggestSavedSwitchKeys = { "autoSuggestName", "suggestsaved", "suggestSaved", "waypoint-suggestsaved", "waypoint-suggestSaved", "wpsuggestsaved", "suggest-save" };
 
         private static Harmony harmony;
         private static ICoreClientAPI capi;
@@ -4265,8 +4265,8 @@ private static double Clamp(double v, double lo, double hi)
                 if (__instance?.SingleComposer == null || mod == null) return;
 
                 // Priority order:
-                // 1) last add-dialog toggle callback state (user intent while editing this dialog)
-                // 2) direct switch state read from composer
+                // 1) direct switch state read from composer
+                // 2) last add-dialog toggle callback state (fallback when switch cannot be reflected)
                 // 3) OFF by default (no Beacon Manager override in Add dialog)
                 bool? on = TryGetSwitchStateNullable(__instance.SingleComposer, BeaconSwitchKey);
                 if (!on.HasValue && addDialogBeaconStateValid)
@@ -4276,6 +4276,12 @@ private static double Clamp(double v, double lo, double hi)
                 if (!on.HasValue)
                 {
                     on = false;
+                }
+
+                bool? suggestSaved = TryGetSuggestSavedState(__instance.SingleComposer);
+                if (suggestSaved.HasValue)
+                {
+                    mod.SetSuggestSavedDefault(suggestSaved.Value);
                 }
 
                 mod.SetPendingAddDialogChoice(on.Value);
@@ -4600,6 +4606,19 @@ private static double Clamp(double v, double lo, double hi)
                 {
                 }
             }
+        }
+
+        private static bool? TryGetSuggestSavedState(GuiComposer composer)
+        {
+            if (composer == null) return null;
+
+            foreach (string key in SuggestSavedSwitchKeys)
+            {
+                bool? value = TryGetSwitchStateNullable(composer, key);
+                if (value.HasValue) return value.Value;
+            }
+
+            return null;
         }
 
         // ---- Switch helpers (reflection-safe across VS versions) ----
