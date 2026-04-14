@@ -4090,9 +4090,14 @@ private static double Clamp(double v, double lo, double hi)
 
         public static GuiComposer AddBeaconComponentAdd(GuiComposer composer, ref ElementBounds leftColumn, ref ElementBounds rightColumn)
         {
+            // Add dialog layout is tighter (and can include extra rows from other mods, e.g. Cartographer).
+            // Keep Beacon in the right column directly under "Suggest saved" so it doesn't drift too low.
+            ElementBounds beaconSwitchBounds = rightColumn.BelowCopy(0, 5).WithFixedWidth(28).WithFixedHeight(28);
+            ElementBounds beaconLabelBounds = beaconSwitchBounds.BelowCopy(-120, 4).WithFixedWidth(110).WithFixedHeight(24);
+
             return composer
-                .AddStaticText(Vintagestory.API.Config.Lang.Get("Beacon"), CairoFont.WhiteSmallText(), leftColumn = leftColumn.BelowCopy(0, 9))
-                .AddSwitch(OnBeaconToggled, rightColumn = rightColumn.BelowCopy(0, 40).WithFixedWidth(28).WithFixedHeight(28), BeaconSwitchKey);
+                .AddStaticText(Vintagestory.API.Config.Lang.Get("Beacon"), CairoFont.WhiteSmallText(), beaconLabelBounds)
+                .AddSwitch(OnBeaconToggled, rightColumn = beaconSwitchBounds, BeaconSwitchKey);
         }
 
         public static IEnumerable<CodeInstruction> ComposeDialogEdit_Transpiler(IEnumerable<CodeInstruction> instructions)
