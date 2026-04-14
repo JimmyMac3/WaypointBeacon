@@ -173,7 +173,6 @@ namespace WaypointBeacon
             public bool DefaultNewWaypointBeaconOn = true;
             public bool GlobalBeaconsEnabled = true;
             public bool BeamsEnabled = true;
-            public bool SuggestSavedDefault = false;
         }
 
         private WaypointBeaconClientConfig clientConfig = new WaypointBeaconClientConfig();
@@ -182,8 +181,6 @@ namespace WaypointBeacon
 
 
         public bool BeamsEnabled => clientConfig?.BeamsEnabled ?? true;
-
-        public bool SuggestSavedDefault => clientConfig?.SuggestSavedDefault ?? false;
 
         public bool ShowIconsInLabels => true;
 
@@ -337,17 +334,6 @@ private float TryGetCairoFontPx(CairoFont font)
 
             // No need to rebuild visible beacons; beam renderer reads this flag each frame.
         }
-
-
-
-        public void SetSuggestSavedDefault(bool enabled)
-        {
-            if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
-            clientConfig.SuggestSavedDefault = enabled;
-            try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
-        }
-
-
         public void ToggleGlobalBeaconsEnabled()
         {
             SetGlobalBeaconsEnabled(!GlobalBeaconsEnabled);
@@ -3952,8 +3938,6 @@ private static double Clamp(double v, double lo, double hi)
         private const string AddDlg = "Vintagestory.GameContent.GuiDialogAddWayPoint";
 
         private const string BeaconSwitchKey = "wbBeaconSwitch";
-        private static readonly string[] SuggestSavedSwitchKeys = { "autoSuggestName", "suggestsaved", "suggestSaved", "waypoint-suggestsaved", "waypoint-suggestSaved", "wpsuggestsaved", "suggest-save" };
-
         private static Harmony harmony;
         private static ICoreClientAPI capi;
         private static WaypointBeaconModSystem mod;
@@ -4223,8 +4207,6 @@ private static double Clamp(double v, double lo, double hi)
 
                 // Add dialog starts OFF by default; user choice in this dialog is authoritative.
                 bool on = false;
-                TryApplySuggestSavedDefault(__instance.SingleComposer);
-
                 object sw = __instance.SingleComposer.GetSwitch(BeaconSwitchKey);
                 if (sw == null)
                 {
@@ -4276,12 +4258,6 @@ private static double Clamp(double v, double lo, double hi)
                 if (!on.HasValue)
                 {
                     on = false;
-                }
-
-                bool? suggestSaved = TryGetSuggestSavedState(__instance.SingleComposer);
-                if (suggestSaved.HasValue)
-                {
-                    mod.SetSuggestSavedDefault(suggestSaved.Value);
                 }
 
                 mod.SetPendingAddDialogChoice(on.Value);
@@ -4586,39 +4562,6 @@ private static double Clamp(double v, double lo, double hi)
             int yi = (int)Math.Round(y);
             int zi = (int)Math.Round(z);
             return $"{xi},{yi},{zi}";
-        }
-
-        private static void TryApplySuggestSavedDefault(GuiComposer composer)
-        {
-            if (composer == null || mod == null) return;
-
-            bool desired = mod.SuggestSavedDefault;
-            foreach (string key in SuggestSavedSwitchKeys)
-            {
-                try
-                {
-                    object sw = composer.GetSwitch(key);
-                    if (sw == null) continue;
-                    TrySetSwitchState(composer, key, desired);
-                    return;
-                }
-                catch
-                {
-                }
-            }
-        }
-
-        private static bool? TryGetSuggestSavedState(GuiComposer composer)
-        {
-            if (composer == null) return null;
-
-            foreach (string key in SuggestSavedSwitchKeys)
-            {
-                bool? value = TryGetSwitchStateNullable(composer, key);
-                if (value.HasValue) return value.Value;
-            }
-
-            return null;
         }
 
         // ---- Switch helpers (reflection-safe across VS versions) ----
