@@ -3958,7 +3958,7 @@ private static double Clamp(double v, double lo, double hi)
                 var patcherType = typeof(WaypointDialogBeaconPatch);
 
                 // ---- EDIT dialog ----
-                var editCompose = typeof(GuiDialogEditWayPoint).GetMethod("ComposeDialog", BindingFlags.Instance | BindingFlags.NonPublic);
+                var editCompose = FindDialogMethod(typeof(GuiDialogEditWayPoint), "ComposeDialog");
                 if (editCompose != null)
                 {
                     harmony.Patch(editCompose,
@@ -3967,15 +3967,19 @@ private static double Clamp(double v, double lo, double hi)
                     );
                 }
 
-                var editOnSave = typeof(GuiDialogEditWayPoint).GetMethod("onSave", BindingFlags.Instance | BindingFlags.NonPublic);
+                var editOnSave = FindDialogMethod(typeof(GuiDialogEditWayPoint), "OnSave", "onSave");
                 if (editOnSave != null)
                 {
                     harmony.Patch(editOnSave, postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_GuiDialogEditWayPoint_onSave), BindingFlags.Static | BindingFlags.Public)));
                 }
+                else
+                {
+                    capi?.Logger?.Warning("[WaypointBeacon] Could not find GuiDialogEditWayPoint.OnSave/onSave; edit beacon save hook not patched.");
+                }
 
 
                 // ---- ADD dialog ----
-                var addCompose = typeof(GuiDialogAddWayPoint).GetMethod("ComposeDialog", BindingFlags.Instance | BindingFlags.NonPublic);
+                var addCompose = FindDialogMethod(typeof(GuiDialogAddWayPoint), "ComposeDialog");
                 if (addCompose != null)
                 {
                     harmony.Patch(addCompose,
@@ -3985,10 +3989,14 @@ private static double Clamp(double v, double lo, double hi)
                 }
 
 
-                var addOnSave = typeof(GuiDialogAddWayPoint).GetMethod("onSave", BindingFlags.Instance | BindingFlags.NonPublic);
+                var addOnSave = FindDialogMethod(typeof(GuiDialogAddWayPoint), "OnSave", "onSave");
                 if (addOnSave != null)
                 {
                     harmony.Patch(addOnSave, prefix: new HarmonyMethod(patcherType.GetMethod(nameof(Pre_GuiDialogAddWayPoint_onSave), BindingFlags.Static | BindingFlags.Public)), postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_GuiDialogAddWayPoint_onSave), BindingFlags.Static | BindingFlags.Public)));
+                }
+                else
+                {
+                    capi?.Logger?.Warning("[WaypointBeacon] Could not find GuiDialogAddWayPoint.OnSave/onSave; manual add beacon choice will not be captured.");
                 }
 
 
@@ -3996,7 +4004,7 @@ private static double Clamp(double v, double lo, double hi)
                 Type cartographerEditType = FindTypeByFullName("NB.Cartographer.GuiDialogEditSharedWayPoint");
                 if (cartographerEditType != null)
                 {
-                    var cCompose = cartographerEditType.GetMethod("ComposeDialog", BindingFlags.Instance | BindingFlags.NonPublic);
+                    var cCompose = FindDialogMethod(cartographerEditType, "ComposeDialog");
                     if (cCompose != null)
                     {
                         harmony.Patch(cCompose,
@@ -4005,7 +4013,7 @@ private static double Clamp(double v, double lo, double hi)
                         );
                     }
 
-                    var cOnSave = cartographerEditType.GetMethod("onSave", BindingFlags.Instance | BindingFlags.NonPublic);
+                    var cOnSave = FindDialogMethod(cartographerEditType, "OnSave", "onSave");
                     if (cOnSave != null)
                     {
                         harmony.Patch(cOnSave,
@@ -4038,6 +4046,31 @@ private static double Clamp(double v, double lo, double hi)
                 }
             }
             catch { }
+
+            return null;
+        }
+
+        private static MethodInfo FindDialogMethod(Type type, params string[] candidateNames)
+        {
+            if (type == null || candidateNames == null || candidateNames.Length == 0) return null;
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            foreach (string name in candidateNames)
+            {
+                if (string.IsNullOrEmpty(name)) continue;
+
+                try
+                {
+                    MethodInfo exact = type.GetMethod(name, flags);
+                    if (exact != null) return exact;
+
+                    MethodInfo ignoreCase = type.GetMethod(name, flags | BindingFlags.IgnoreCase);
+                    if (ignoreCase != null) return ignoreCase;
+                }
+                catch
+                {
+                }
+            }
 
             return null;
         }
@@ -4252,6 +4285,9 @@ private static double Clamp(double v, double lo, double hi)
                 // 1) direct switch state read from composer
                 // 2) last add-dialog toggle callback state (fallback when switch cannot be reflected)
                 // 3) Beacon Manager default
+                //
+                // Manual Add Waypoint must override the default. The default is only for initializing
+                // the dialog switch when it opens.
                 bool? on = TryGetSwitchStateNullable(__instance.SingleComposer, BeaconSwitchKey);
                 if (!on.HasValue && addDialogBeaconStateValid)
                 {
