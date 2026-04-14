@@ -169,6 +169,8 @@ namespace WaypointBeacon
                 "Beacon-Vision.\nCrank it up for superhero sight\nOr turn it down and save your eyeballs.\n\nRange: 250-20000 blocks.\nDefault=10000 blocks.");
             AddSwitchRow("Near Beacon Fade-out", "bm-fadenear", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnNearFadeChanged, 300,
                 "Beacons get shy the closer you get.\nFade distance can be changed in config.\n\nDefault=On.");
+            AddSwitchRow("New Waypoint = Beacon", "bm-newwaypointbeacon", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnDefaultNewWaypointBeaconChanged, 240,
+                "Controls default beacon state for new waypoints.\nYou can still override this per-waypoint in the Add dialog.\n\nDefault=On.");
             AddSwitchRow("Hide All Beacons", "bm-hideall", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnHideAllBeaconsChanged, 200,
                 "Panic button! Nuke it all!\nThis just temporarily stops the mod from rendering stuff.\n\nDefault=Off");
             AddSwitchRow($"Show Beams ({showBeamsKey})", "bm-showbeams", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnShowBeamsChanged, 220,
@@ -215,6 +217,10 @@ namespace WaypointBeacon
             bool nearFade = mod?.NearBeaconFadeOutEnabled ?? false;
             try { SingleComposer.GetSwitch("bm-fadenear").SetValue(nearFade); } catch { }
 
+            // New waypoint beacon default switch
+            bool newWpBeacon = mod?.DefaultNewWaypointBeaconOn ?? true;
+            try { SingleComposer.GetSwitch("bm-newwaypointbeacon").SetValue(newWpBeacon); } catch { }
+
             // (Icons are always shown)
         }
 
@@ -234,6 +240,11 @@ namespace WaypointBeacon
         private void OnNearFadeChanged(bool on)
         {
             mod?.SetNearBeaconFadeOutEnabled(on);
+        }
+
+        private void OnDefaultNewWaypointBeaconChanged(bool on)
+        {
+            mod?.SetDefaultNewWaypointBeaconOn(on);
         }
 
         private void OnHideAllBeaconsChanged(bool hideAll)

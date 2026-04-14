@@ -392,12 +392,12 @@ private float TryGetCairoFontPx(CairoFont font)
         }
 
         // Remembered default for new waypoints (Add Waypoint dialog)
-        public bool DefaultNewWaypointBeaconOn => false;
+        public bool DefaultNewWaypointBeaconOn => clientConfig?.DefaultNewWaypointBeaconOn ?? true;
 
 
 
         /// <summary>What the Add Waypoint dialog checkbox should default to.</summary>
-        public bool AddDialogBeaconChoice => false;
+        public bool AddDialogBeaconChoice => DefaultNewWaypointBeaconOn;
 
         internal void SetPendingAddDialogChoice(bool on)
         {
@@ -412,7 +412,9 @@ private float TryGetCairoFontPx(CairoFont font)
 
         public void SetDefaultNewWaypointBeaconOn(bool on)
         {
-            // Intentionally disabled: this manager setting is no longer used.
+            if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
+            clientConfig.DefaultNewWaypointBeaconOn = on;
+            try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
         }
 
         // --------------------------------------------------------------------
@@ -4205,8 +4207,8 @@ private static double Clamp(double v, double lo, double hi)
             {
                 if (__instance?.SingleComposer == null || mod == null) return;
 
-                // Add dialog starts OFF by default; user choice in this dialog is authoritative.
-                bool on = false;
+                // Add dialog starts from Beacon Manager default; user choice in this dialog is authoritative.
+                bool on = mod.DefaultNewWaypointBeaconOn;
                 object sw = __instance.SingleComposer.GetSwitch(BeaconSwitchKey);
                 if (sw == null)
                 {
@@ -4249,7 +4251,7 @@ private static double Clamp(double v, double lo, double hi)
                 // Priority order:
                 // 1) direct switch state read from composer
                 // 2) last add-dialog toggle callback state (fallback when switch cannot be reflected)
-                // 3) OFF by default (no Beacon Manager override in Add dialog)
+                // 3) Beacon Manager default
                 bool? on = TryGetSwitchStateNullable(__instance.SingleComposer, BeaconSwitchKey);
                 if (!on.HasValue && addDialogBeaconStateValid)
                 {
@@ -4257,7 +4259,7 @@ private static double Clamp(double v, double lo, double hi)
                 }
                 if (!on.HasValue)
                 {
-                    on = false;
+                    on = mod.DefaultNewWaypointBeaconOn;
                 }
 
                 mod.SetPendingAddDialogChoice(on.Value);
