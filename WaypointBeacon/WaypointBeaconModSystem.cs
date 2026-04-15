@@ -4092,9 +4092,11 @@ private static double Clamp(double v, double lo, double hi)
         {
             // Prefer anchoring to the Suggest Saved switch bounds when available.
             // This avoids fragile per-mod detection and keeps Beacon aligned both with/without Cartographer.
-            ElementBounds suggestBounds = TryGetAnySwitchBounds(composer, "autoSuggestName", "suggestsaved", "suggestSaved", "waypoint-suggestsaved", "waypoint-suggestSaved");
+            string suggestKey;
+            ElementBounds suggestBounds = TryGetAnySwitchBounds(composer, out suggestKey, "autoSuggestName", "suggestsaved", "suggestSaved", "waypoint-suggestsaved", "waypoint-suggestSaved");
             ElementBounds beaconSwitchBounds;
             ElementBounds beaconLabelBounds;
+            bool hasSharedRow = false;
 
             if (suggestBounds != null)
             {
@@ -4104,10 +4106,12 @@ private static double Clamp(double v, double lo, double hi)
             else
             {
                 // Fallback offsets when Suggest Saved control shape/key cannot be discovered.
-                bool hasSharedRow = HasAnySwitch(composer, "shared", "waypoint-shared");
+                hasSharedRow = HasAnySwitch(composer, "shared", "waypoint-shared");
                 beaconSwitchBounds = rightColumn.BelowCopy(170, hasSharedRow ? -33 : 37).WithFixedWidth(28).WithFixedHeight(28);
                 beaconLabelBounds = beaconSwitchBounds.BelowCopy(-70, hasSharedRow ? -24 : -25).WithFixedWidth(90).WithFixedHeight(24);
             }
+
+            LogAddLayoutDetection(composer, suggestBounds != null, suggestKey, hasSharedRow, beaconSwitchBounds, beaconLabelBounds);
 
             return composer
                 .AddStaticText(Vintagestory.API.Config.Lang.Get("Beacon"), CairoFont.WhiteSmallText(), beaconLabelBounds)
@@ -4131,8 +4135,9 @@ private static double Clamp(double v, double lo, double hi)
             return false;
         }
 
-        private static ElementBounds TryGetAnySwitchBounds(GuiComposer composer, params string[] keys)
+        private static ElementBounds TryGetAnySwitchBounds(GuiComposer composer, out string matchedKey, params string[] keys)
         {
+            matchedKey = null;
             if (composer == null || keys == null) return null;
 
             foreach (string key in keys)
@@ -4144,7 +4149,11 @@ private static double Clamp(double v, double lo, double hi)
                     if (sw == null) continue;
 
                     ElementBounds bounds = (TryGetMember(sw, "Bounds") ?? TryGetMember(sw, "bounds")) as ElementBounds;
-                    if (bounds != null) return bounds;
+                    if (bounds != null)
+                    {
+                        matchedKey = key;
+                        return bounds;
+                    }
                 }
                 catch
                 {
@@ -4152,6 +4161,43 @@ private static double Clamp(double v, double lo, double hi)
             }
 
             return null;
+        }
+
+        private static void LogAddLayoutDetection(GuiComposer composer, bool suggestFound, string suggestKey, bool hasSharedRow, ElementBounds switchBounds, ElementBounds labelBounds)
+        {
+            try
+            {
+                bool cartographerPresent = FindTypeByFullName("NB.Cartographer.GuiDialogEditSharedWayPoint") != null;
+                capi?.Logger?.Notification(
+                    "[WaypointBeacon] Add dialog layout detect: cartographerPresent={0}, suggestFound={1}, suggestKey={2}, sharedRowDetected={3}, switch={4}, label={5}",
+                    cartographerPresent,
+                    suggestFound,
+                    suggestKey ?? "<none>",
+                    hasSharedRow,
+                    DescribeBounds(switchBounds),
+                    DescribeBounds(labelBounds)
+                );
+            }
+            catch
+            {
+            }
+        }
+
+        private static string DescribeBounds(ElementBounds bounds)
+        {
+            if (bounds == null) return "<null>";
+            try
+            {
+                object fx = TryGetMember(bounds, "fixedX");
+                object fy = TryGetMember(bounds, "fixedY");
+                object fw = TryGetMember(bounds, "fixedWidth");
+                object fh = TryGetMember(bounds, "fixedHeight");
+                return $"x={fx ?? "?"},y={fy ?? "?"},w={fw ?? "?"},h={fh ?? "?"}";
+            }
+            catch
+            {
+                return "<unavailable>";
+            }
         }
 
         public static IEnumerable<CodeInstruction> ComposeDialogEdit_Transpiler(IEnumerable<CodeInstruction> instructions)
