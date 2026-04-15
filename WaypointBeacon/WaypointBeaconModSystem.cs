@@ -4099,7 +4099,7 @@ private static double Clamp(double v, double lo, double hi)
                 hasSharedRow ? -33 : 37
             ).WithFixedWidth(28).WithFixedHeight(28);
 
-            ElementBounds beaconLabelBounds = rightColumn.BelowCopy(
+            ElementBounds beaconLabelBounds = beaconSwitchBounds.BelowCopy(
                 -70,
                 hasSharedRow ? -24 : -25
             ).WithFixedWidth(90).WithFixedHeight(24);
