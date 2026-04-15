@@ -4090,14 +4090,40 @@ private static double Clamp(double v, double lo, double hi)
 
         public static GuiComposer AddBeaconComponentAdd(GuiComposer composer, ref ElementBounds leftColumn, ref ElementBounds rightColumn)
         {
-            // Add dialog layout is tighter (and can include extra rows from other mods, e.g. Cartographer).
-            // Keep Beacon in the right column directly under "Suggest saved" so it doesn't drift too low.
-            ElementBounds beaconSwitchBounds = rightColumn.BelowCopy(0, 5).WithFixedWidth(28).WithFixedHeight(28);
-            ElementBounds beaconLabelBounds = beaconSwitchBounds.BelowCopy(-120, 4).WithFixedWidth(110).WithFixedHeight(24);
+            // Cartographer adds a "Shared" switch row in Add Waypoint, which shifts ideal Beacon placement.
+            // Use per-layout offsets so Beacon remains aligned and compact in both variants.
+            bool hasSharedRow = HasAnySwitch(composer, "shared", "waypoint-shared");
+
+            ElementBounds beaconSwitchBounds = rightColumn.BelowCopy(
+                170,
+                hasSharedRow ? -33 : 37
+            ).WithFixedWidth(28).WithFixedHeight(28);
+
+            ElementBounds beaconLabelBounds = rightColumn.BelowCopy(
+                -70,
+                hasSharedRow ? -24 : -25
+            ).WithFixedWidth(90).WithFixedHeight(24);
 
             return composer
                 .AddStaticText(Vintagestory.API.Config.Lang.Get("Beacon"), CairoFont.WhiteSmallText(), beaconLabelBounds)
                 .AddSwitch(OnBeaconToggled, rightColumn = beaconSwitchBounds, BeaconSwitchKey);
+        }
+
+        private static bool HasAnySwitch(GuiComposer composer, params string[] keys)
+        {
+            if (composer == null || keys == null) return false;
+            foreach (string key in keys)
+            {
+                if (string.IsNullOrEmpty(key)) continue;
+                try
+                {
+                    if (composer.GetSwitch(key) != null) return true;
+                }
+                catch
+                {
+                }
+            }
+            return false;
         }
 
         public static IEnumerable<CodeInstruction> ComposeDialogEdit_Transpiler(IEnumerable<CodeInstruction> instructions)
