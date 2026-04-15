@@ -4090,114 +4090,15 @@ private static double Clamp(double v, double lo, double hi)
 
         public static GuiComposer AddBeaconComponentAdd(GuiComposer composer, ref ElementBounds leftColumn, ref ElementBounds rightColumn)
         {
-            // Prefer anchoring to the Suggest Saved switch bounds when available.
-            // This avoids fragile per-mod detection and keeps Beacon aligned both with/without Cartographer.
-            string suggestKey;
-            ElementBounds suggestBounds = TryGetAnySwitchBounds(composer, out suggestKey, "autoSuggestName", "suggestsaved", "suggestSaved", "waypoint-suggestsaved", "waypoint-suggestSaved");
-            ElementBounds beaconSwitchBounds;
-            ElementBounds beaconLabelBounds;
-            bool hasSharedRow = false;
-
-            if (suggestBounds != null)
-            {
-                beaconSwitchBounds = suggestBounds.BelowCopy(0, 37).WithFixedWidth(28).WithFixedHeight(28);
-                beaconLabelBounds = beaconSwitchBounds.BelowCopy(-70, -25).WithFixedWidth(90).WithFixedHeight(24);
-            }
-            else
-            {
-                // Fallback offsets when Suggest Saved control shape/key cannot be discovered.
-                hasSharedRow = HasAnySwitch(composer, "shared", "waypoint-shared");
-                beaconSwitchBounds = rightColumn.BelowCopy(170, hasSharedRow ? -33 : 37).WithFixedWidth(28).WithFixedHeight(28);
-                beaconLabelBounds = beaconSwitchBounds.BelowCopy(-70, hasSharedRow ? -24 : -25).WithFixedWidth(90).WithFixedHeight(24);
-            }
-
-            LogAddLayoutDetection(composer, suggestBounds != null, suggestKey, hasSharedRow, beaconSwitchBounds, beaconLabelBounds);
+            // Keep Add-dialog Beacon controls at a stable absolute location so extra injected rows
+            // (e.g. from other mods) cannot push the controls into the color palette.
+            // Vintage Story scales Fixed bounds with UI scale, so this remains scale-aware.
+            ElementBounds beaconSwitchBounds = ElementBounds.Fixed(260, 90, 28, 28);
+            ElementBounds beaconLabelBounds = ElementBounds.Fixed(190, 93, 90, 24);
 
             return composer
                 .AddStaticText(Vintagestory.API.Config.Lang.Get("Beacon"), CairoFont.WhiteSmallText(), beaconLabelBounds)
                 .AddSwitch(OnBeaconToggled, rightColumn = beaconSwitchBounds, BeaconSwitchKey);
-        }
-
-        private static bool HasAnySwitch(GuiComposer composer, params string[] keys)
-        {
-            if (composer == null || keys == null) return false;
-            foreach (string key in keys)
-            {
-                if (string.IsNullOrEmpty(key)) continue;
-                try
-                {
-                    if (composer.GetSwitch(key) != null) return true;
-                }
-                catch
-                {
-                }
-            }
-            return false;
-        }
-
-        private static ElementBounds TryGetAnySwitchBounds(GuiComposer composer, out string matchedKey, params string[] keys)
-        {
-            matchedKey = null;
-            if (composer == null || keys == null) return null;
-
-            foreach (string key in keys)
-            {
-                if (string.IsNullOrEmpty(key)) continue;
-                try
-                {
-                    object sw = composer.GetSwitch(key);
-                    if (sw == null) continue;
-
-                    ElementBounds bounds = (TryGetMember(sw, "Bounds") ?? TryGetMember(sw, "bounds")) as ElementBounds;
-                    if (bounds != null)
-                    {
-                        matchedKey = key;
-                        return bounds;
-                    }
-                }
-                catch
-                {
-                }
-            }
-
-            return null;
-        }
-
-        private static void LogAddLayoutDetection(GuiComposer composer, bool suggestFound, string suggestKey, bool hasSharedRow, ElementBounds switchBounds, ElementBounds labelBounds)
-        {
-            try
-            {
-                bool cartographerPresent = FindTypeByFullName("NB.Cartographer.GuiDialogEditSharedWayPoint") != null;
-                capi?.Logger?.Notification(
-                    "[WaypointBeacon] Add dialog layout detect: cartographerPresent={0}, suggestFound={1}, suggestKey={2}, sharedRowDetected={3}, switch={4}, label={5}",
-                    cartographerPresent,
-                    suggestFound,
-                    suggestKey ?? "<none>",
-                    hasSharedRow,
-                    DescribeBounds(switchBounds),
-                    DescribeBounds(labelBounds)
-                );
-            }
-            catch
-            {
-            }
-        }
-
-        private static string DescribeBounds(ElementBounds bounds)
-        {
-            if (bounds == null) return "<null>";
-            try
-            {
-                object fx = TryGetMember(bounds, "fixedX");
-                object fy = TryGetMember(bounds, "fixedY");
-                object fw = TryGetMember(bounds, "fixedWidth");
-                object fh = TryGetMember(bounds, "fixedHeight");
-                return $"x={fx ?? "?"},y={fy ?? "?"},w={fw ?? "?"},h={fh ?? "?"}";
-            }
-            catch
-            {
-                return "<unavailable>";
-            }
         }
 
         public static IEnumerable<CodeInstruction> ComposeDialogEdit_Transpiler(IEnumerable<CodeInstruction> instructions)
