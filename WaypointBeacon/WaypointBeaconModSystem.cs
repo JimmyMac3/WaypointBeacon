@@ -550,7 +550,6 @@ private float TryGetCairoFontPx(CairoFont font)
         {
             capi = api;
 
-            capi?.Logger?.Notification("[WaypointBeacon] Init 1.6.15 runtime-compat build");
 
             try
             {
@@ -844,7 +843,6 @@ private float TryGetCairoFontPx(CairoFont font)
 
             if (!TryOpenEditDialogForWaypoint(waypointLayer, createdWaypoint)) return false;
 
-            capi?.Logger?.Notification("[WaypointBeacon] Created waypoint and opened Edit dialog at {0},{1},{2}", target.X, target.Y, target.Z);
             return true;
         }
 
@@ -952,7 +950,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     TrySetMemberValue(wp, "PlayerUid", playerUid);
                 }
 
-                capi?.Logger?.Notification("[WaypointBeacon] Seeded new waypoint with id={0} at {1},{2},{3}", waypointId, target.X, target.Y, target.Z);
                 return wp;
             }
             catch (Exception e)
@@ -1035,7 +1032,6 @@ private float TryGetCairoFontPx(CairoFont font)
                         if (ret is bool b && !b) continue;
 
                         methodUsed = method.Name;
-                        capi?.Logger?.Notification("[WaypointBeacon] Added waypoint using {0}.{1}", waypointLayer.GetType().Name, method.Name);
                         return true;
                     }
                     catch (Exception invokeEx)
@@ -1123,7 +1119,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     {
                         object ret = method.Invoke(waypointLayer, args);
                         if (ret is bool b && !b) continue;
-                        capi?.Logger?.Notification("[WaypointBeacon] Opened edit dialog using {0}.{1} (id={2}, index={3})", waypointLayer.GetType().Name, method.Name, waypointId, waypointIndex);
                         return true;
                     }
                     catch (Exception invokeEx)
@@ -1153,7 +1148,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     var dlg = ctor.Invoke(args) as GuiDialogEditWayPoint;
                     if (dlg?.TryOpen() == true)
                     {
-                        capi?.Logger?.Notification("[WaypointBeacon] Opened edit dialog via ctor {0} (id={1}, index={2})", ctor, waypointId, waypointIndex);
                         return true;
                     }
                 }
@@ -1386,11 +1380,6 @@ private float TryGetCairoFontPx(CairoFont font)
                 y = rawY;
                 z = NormalizeWrappedCoord(rawZ, mapSizeZ);
 
-                if (rawX != x || rawZ != z)
-                {
-                    capi?.Logger?.Notification("[WaypointBeacon] Add Waypoint (Direct): normalized look-pos raw={0},{1},{2} -> norm={3},{4},{5} (map={6}x{7})", rawX, rawY, rawZ, x, y, z, mapSizeX, mapSizeZ);
-                }
-
                 return true;
             }
             catch
@@ -1438,7 +1427,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     if (px || py || pz) applied = true;
                 }
 
-                capi?.Logger?.Notification("[WaypointBeacon] Add Waypoint (Direct): look-pos {0},{1},{2} applied={3}", x, y, z, applied);
             }
             catch (Exception e)
             {
@@ -1557,7 +1545,6 @@ private float TryGetCairoFontPx(CairoFont font)
                 {
                     if (!TryInvokeAddWaypointMethod(sys, m)) continue;
 
-                    capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via fixed v1.21.6 hotkey method: {0}.{1}", t.FullName, m.Name);
                     return true;
                 }
             }
@@ -1656,7 +1643,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     {
                         if (TryInvokeTriggerMethod(input, m, code))
                         {
-                            capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via trigger-by-code '{0}' using {1}", code, m.Name);
                             return true;
                         }
                     }
@@ -1733,7 +1719,6 @@ private float TryGetCairoFontPx(CairoFont font)
 
                     if (TryInvokeAddWaypointMethod(hk, m))
                     {
-                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey method {0}.{1}", hk.GetType().Name, m.Name);
                         return true;
                     }
 
@@ -1745,7 +1730,6 @@ private float TryGetCairoFontPx(CairoFont font)
                         {
                             object ret = m.Invoke(hk, new object[] { comb });
                             if (ret is bool b && !b) continue;
-                            capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey direct invoke {0}.{1}", hk.GetType().Name, m.Name);
                             return true;
                         }
                         catch { }
@@ -1761,7 +1745,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     var del = f.GetValue(hk) as Delegate;
                     if (TryInvokeDelegateForHotkey(del, comb))
                     {
-                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey delegate field {0}", f.Name);
                         return true;
                     }
                 }
@@ -1774,7 +1757,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     var del = pr.GetValue(hk) as Delegate;
                     if (TryInvokeDelegateForHotkey(del, comb))
                     {
-                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey delegate property {0}", pr.Name);
                         return true;
                     }
                 }
@@ -1899,7 +1881,6 @@ private float TryGetCairoFontPx(CairoFont font)
                 if (!IsSafeAddWaypointMethod(method)) continue;
                 if (TryInvokeAddWaypointMethod(target, method))
                 {
-                    capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via {0}.{1}", target.GetType().Name, method.Name);
                     return true;
                 }
             }
@@ -2008,7 +1989,6 @@ private float TryGetCairoFontPx(CairoFont font)
             {
                 if (!TryInvokeAddWaypointMethod(target, m)) continue;
 
-                capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via {0}.{1}", t.Name, m.Name);
                 return true;
             }
 
