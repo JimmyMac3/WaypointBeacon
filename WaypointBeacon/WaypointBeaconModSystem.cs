@@ -4090,19 +4090,24 @@ private static double Clamp(double v, double lo, double hi)
 
         public static GuiComposer AddBeaconComponentAdd(GuiComposer composer, ref ElementBounds leftColumn, ref ElementBounds rightColumn)
         {
-            // Cartographer adds a "Shared" switch row in Add Waypoint, which shifts ideal Beacon placement.
-            // Use per-layout offsets so Beacon remains aligned and compact in both variants.
-            bool hasSharedRow = HasAnySwitch(composer, "shared", "waypoint-shared");
+            // Prefer anchoring to the Suggest Saved switch bounds when available.
+            // This avoids fragile per-mod detection and keeps Beacon aligned both with/without Cartographer.
+            ElementBounds suggestBounds = TryGetAnySwitchBounds(composer, "autoSuggestName", "suggestsaved", "suggestSaved", "waypoint-suggestsaved", "waypoint-suggestSaved");
+            ElementBounds beaconSwitchBounds;
+            ElementBounds beaconLabelBounds;
 
-            ElementBounds beaconSwitchBounds = rightColumn.BelowCopy(
-                170,
-                hasSharedRow ? -33 : 37
-            ).WithFixedWidth(28).WithFixedHeight(28);
-
-            ElementBounds beaconLabelBounds = beaconSwitchBounds.BelowCopy(
-                -70,
-                hasSharedRow ? -24 : -25
-            ).WithFixedWidth(90).WithFixedHeight(24);
+            if (suggestBounds != null)
+            {
+                beaconSwitchBounds = suggestBounds.BelowCopy(0, 37).WithFixedWidth(28).WithFixedHeight(28);
+                beaconLabelBounds = beaconSwitchBounds.BelowCopy(-70, -25).WithFixedWidth(90).WithFixedHeight(24);
+            }
+            else
+            {
+                // Fallback offsets when Suggest Saved control shape/key cannot be discovered.
+                bool hasSharedRow = HasAnySwitch(composer, "shared", "waypoint-shared");
+                beaconSwitchBounds = rightColumn.BelowCopy(170, hasSharedRow ? -33 : 37).WithFixedWidth(28).WithFixedHeight(28);
+                beaconLabelBounds = beaconSwitchBounds.BelowCopy(-70, hasSharedRow ? -24 : -25).WithFixedWidth(90).WithFixedHeight(24);
+            }
 
             return composer
                 .AddStaticText(Vintagestory.API.Config.Lang.Get("Beacon"), CairoFont.WhiteSmallText(), beaconLabelBounds)
@@ -4124,6 +4129,29 @@ private static double Clamp(double v, double lo, double hi)
                 }
             }
             return false;
+        }
+
+        private static ElementBounds TryGetAnySwitchBounds(GuiComposer composer, params string[] keys)
+        {
+            if (composer == null || keys == null) return null;
+
+            foreach (string key in keys)
+            {
+                if (string.IsNullOrEmpty(key)) continue;
+                try
+                {
+                    object sw = composer.GetSwitch(key);
+                    if (sw == null) continue;
+
+                    ElementBounds bounds = (TryGetMember(sw, "Bounds") ?? TryGetMember(sw, "bounds")) as ElementBounds;
+                    if (bounds != null) return bounds;
+                }
+                catch
+                {
+                }
+            }
+
+            return null;
         }
 
         public static IEnumerable<CodeInstruction> ComposeDialogEdit_Transpiler(IEnumerable<CodeInstruction> instructions)
