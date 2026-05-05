@@ -140,8 +140,9 @@ namespace WaypointBeacon
         private IServerNetworkChannel serverChannel;
 
 
-        // Beacon toggle persistence (server stores per-player; client keeps local overrides)
+        // Beacon toggle persistence (client-local per world+player)
         private readonly Dictionary<string, bool> beaconOverrides = new Dictionary<string, bool>();
+        private readonly HashSet<string> localBeaconOnKeys = new HashSet<string>();
 
         private bool requestedPins;
 
@@ -153,12 +154,20 @@ namespace WaypointBeacon
         private bool serverBaselineInitialized;
         private bool pinsSyncReceived;
         private long clientStartMs;
+        private bool localBeaconStateLoaded;
+        private string localBeaconStateFileName;
 
         private const string PinsAttrKeyPrefix = "waypointbeacon:pins:";
         private const string BaselineAttrKeyPrefix = "waypointbeacon:baseline:";
 
         // ---- Client config (local only) ----
         private const string ClientConfigFileName = "waypointbeacon.json";
+        private const string LocalBeaconStateFilePrefix = "waypointbeacon-beaconstate";
+
+        public class WaypointBeaconLocalState
+        {
+            public List<string> OnKeys = new List<string>();
+        }
 
         public class WaypointBeaconClientConfig
         {
@@ -439,24 +448,11 @@ private float TryGetCairoFontPx(CairoFont font)
             if (!TryGetWaypointPos(wpObj, out double x, out double y, out double z)) return;
 
             string name = TryGetString(wpObj, "Title", "title", "Name", "name", "Text", "text") ?? "";
-            int id = GetStableWaypointId(wpObj, x, y, z, name);
             string key = MakePinKey(x, y, z, name);
 
+            EnsureLocalBeaconStateLoaded();
             beaconOverrides[key] = on;
-
-            // Persist + sync
-            if (clientChannel?.Connected == true)
-            {
-                clientChannel.SendPacket(new WbSetPinnedPacket
-                {
-                    WaypointId = id,
-                    Pinned = on,
-                    X = x,
-                    Y = y,
-                    Z = z,
-                    Title = name
-                });
-            }
+            SetLocalBeaconKeyOn(key, on);
 
             RefreshBeacons();
         }
@@ -2128,7 +2124,10 @@ private float TryGetCairoFontPx(CairoFont font)
                     beaconOverrides[bKey] = seedOn;
                 }
 
-                bool beaconOn = beaconOverrides[bKey];
+                EnsureLocalBeaconStateLoaded();
+                bool beaconOn = beaconOverrides.TryGetValue(bKey, out bool overrideOn)
+                    ? overrideOn
+                    : localBeaconOnKeys.Contains(bKey);
                 list.Add(new WaypointRow
                 {
                     Id = id,
@@ -2169,33 +2168,16 @@ private float TryGetCairoFontPx(CairoFont font)
                     // IMPORTANT: wp might be a struct (value type). This is a boxed copy.
                     // We must modify the boxed copy THEN write it back into the list slot.
                     // IMPORTANT: we do NOT change the vanilla waypoint here.
-                    // We only change our beacon override and persist it to the server.
+                    // We only change our beacon override and persist it client-locally.
                     object boxed = wp; // boxed copy (safe if wp is a struct)
 
                     TryGetWaypointPos(boxed, out double px, out double py, out double pz);
                     string title = TryGetString(boxed, "Title", "title", "Name", "name", "Text", "text") ?? "";
 
                     string oKey = MakePinKey(px, py, pz, title);
+                    EnsureLocalBeaconStateLoaded();
                     beaconOverrides[oKey] = pinned;
-
-                    var pkt = new WbSetPinnedPacket
-                    {
-                        WaypointId = waypointId,
-                        Pinned = pinned,
-                        X = px,
-                        Y = py,
-                        Z = pz,
-                        Title = title
-                    };
-
-                    if (clientChannel?.Connected == true)
-                    {
-                        clientChannel.SendPacket(pkt);
-                    }
-                    else
-                    {
-                        capi.Logger.Warning("[WaypointBeacon] Beacon override updated, but network channel not connected yet. (No persistence)");
-                    }
+                    SetLocalBeaconKeyOn(oKey, pinned);
 
                     RefreshBeaconsNow();
 
@@ -2216,7 +2198,7 @@ private float TryGetCairoFontPx(CairoFont font)
         /// <summary>
         /// Sets the beacon ON/OFF override for every currently known waypoint, and refreshes rendering.
         /// This mirrors what you'd do manually (open Edit on each waypoint and toggle the beacon checkbox),
-        /// and also syncs the changes to the server in multiplayer.
+        /// and persists changes to the local client beacon-state file.
         /// </summary>
         public void SetAllWaypointBeacons(bool beaconOn)
         {
@@ -2233,24 +2215,11 @@ private float TryGetCairoFontPx(CairoFont font)
                     string title = TryGetString(wp, "Title", "title", "Name", "name", "Text", "text") ?? "";
                     if (!TryGetWaypointPos(wp, out double x, out double y, out double z)) continue;
 
-                    int stableId = GetStableWaypointId(wp, x, y, z, title);
                     string pinKey = MakePinKey(x, y, z, title);
 
+                    EnsureLocalBeaconStateLoaded();
                     beaconOverrides[pinKey] = beaconOn;
-
-                    // Sync to server (if connected) so other players / server persistence stays correct.
-                    if (clientChannel?.Connected == true)
-                    {
-                        clientChannel.SendPacket(new WbSetPinnedPacket
-                        {
-                            WaypointId = stableId,
-                            Pinned = beaconOn,
-                            X = x,
-                            Y = y,
-                            Z = z,
-                            Title = title
-                        });
-                    }
+                    SetLocalBeaconKeyOn(pinKey, beaconOn);
 
                     changed++;
                 }
@@ -2503,7 +2472,10 @@ private float TryGetCairoFontPx(CairoFont font)
                         beaconOverrides[bKey] = seedOn;
                     }
 
-                    bool beaconOn = beaconOverrides.TryGetValue(bKey, out bool overrideOn) ? overrideOn : vanillaPinned;
+                    EnsureLocalBeaconStateLoaded();
+                    bool beaconOn = beaconOverrides.TryGetValue(bKey, out bool overrideOn)
+                        ? overrideOn
+                        : localBeaconOnKeys.Contains(bKey);
                     if (!beaconOn) continue;
                     int colorInt = TryGetInt(wp, "Color", "color", "ARGB", "argb", "Rgb", "rgb", "RGBA", "rgba")
                                                        ?? unchecked((int)0xFFFFFFFF);
@@ -2861,6 +2833,10 @@ private float TryGetCairoFontPx(CairoFont font)
                 }
             }
 
+            EnsureLocalBeaconStateLoaded();
+            bool removedAnyLocal = localBeaconOnKeys.RemoveWhere(k => !liveKeys.Contains(k)) > 0;
+            if (removedAnyLocal) SaveLocalBeaconState();
+
             if (seenWaypointKeys.Count > 0)
             {
                 seenWaypointKeys.RemoveWhere(k => !liveKeys.Contains(k));
@@ -2960,18 +2936,9 @@ private float TryGetCairoFontPx(CairoFont font)
         {
             try
             {
-                serverBaselineInitialized = pkt?.BaselineInitialized == true;
+                // Client-local storage mode: no server pin state import.
+                serverBaselineInitialized = true;
                 pinsSyncReceived = true;
-
-                int n = Math.Min(pkt?.Keys?.Count ?? 0, pkt?.Pinned?.Count ?? 0);
-                for (int i = 0; i < n; i++)
-                {
-                    string k = pkt.Keys[i];
-                    if (string.IsNullOrEmpty(k)) continue;
-                    beaconOverrides[k] = pkt.Pinned[i];
-                }
-
-                RefreshBeaconsNow();
             }
             catch (Exception e)
             {
@@ -2982,6 +2949,60 @@ private float TryGetCairoFontPx(CairoFont font)
         private void ApplyPinOverridesToLiveWaypoints()
         {
             // No longer used: we do not override vanilla waypoint data.
+        }
+
+        private void EnsureLocalBeaconStateLoaded()
+        {
+            if (localBeaconStateLoaded || capi == null) return;
+
+            string uid = capi?.World?.Player?.PlayerUID ?? "unknown";
+            string seed = capi?.World?.Seed.ToString() ?? "unknown";
+            localBeaconStateFileName = $"{LocalBeaconStateFilePrefix}.{seed}.{SanitizeForFileName(uid)}.json";
+
+            try
+            {
+                var state = capi.LoadModConfig<WaypointBeaconLocalState>(localBeaconStateFileName) ?? new WaypointBeaconLocalState();
+                localBeaconOnKeys.Clear();
+                foreach (string k in state.OnKeys ?? new List<string>())
+                {
+                    if (!string.IsNullOrWhiteSpace(k)) localBeaconOnKeys.Add(k);
+                }
+            }
+            catch
+            {
+                localBeaconOnKeys.Clear();
+            }
+
+            localBeaconStateLoaded = true;
+        }
+
+        private void SaveLocalBeaconState()
+        {
+            if (!localBeaconStateLoaded || capi == null || string.IsNullOrWhiteSpace(localBeaconStateFileName)) return;
+            try
+            {
+                capi.StoreModConfig(new WaypointBeaconLocalState { OnKeys = localBeaconOnKeys.OrderBy(k => k).ToList() }, localBeaconStateFileName);
+            }
+            catch { }
+        }
+
+        private void SetLocalBeaconKeyOn(string key, bool on)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return;
+            EnsureLocalBeaconStateLoaded();
+            bool changed = on ? localBeaconOnKeys.Add(key) : localBeaconOnKeys.Remove(key);
+            if (changed) SaveLocalBeaconState();
+        }
+
+        private static string SanitizeForFileName(string v)
+        {
+            if (string.IsNullOrWhiteSpace(v)) return "unknown";
+            var sb = new StringBuilder(v.Length);
+            foreach (char ch in v)
+            {
+                sb.Append(char.IsLetterOrDigit(ch) || ch == '_' || ch == '-' ? ch : '_');
+            }
+            return sb.ToString();
         }
 
 
