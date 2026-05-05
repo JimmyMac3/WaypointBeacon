@@ -2,6 +2,7 @@
 
 using Cairo;
 using System;
+using System.IO;
 using System.Reflection;
 using System.Reflection.Emit;
 using Vintagestory.API.Client;
@@ -65,6 +66,58 @@ namespace WaypointBeacon
             onClosed?.Invoke();
         }
 
+
+        private string GetModDisplayVersion()
+        {
+            try
+            {
+                object loader = api?.ModLoader;
+                if (loader != null)
+                {
+                    var getMod = loader.GetType().GetMethod("GetMod", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(string) }, null);
+                    object modObj = getMod?.Invoke(loader, new object[] { "waypointbeacon" });
+                    if (modObj != null)
+                    {
+                        object info = TryGetMember(modObj, "Info") ?? TryGetMember(modObj, "ModInfo");
+                        object verObj = TryGetMember(info, "Version") ?? TryGetMember(modObj, "Version");
+                        string ver = verObj?.ToString();
+                        if (!string.IsNullOrWhiteSpace(ver)) return ver;
+                    }
+                }
+            }
+            catch
+            {
+                // ignore and try file fallback
+            }
+
+            try
+            {
+                string modInfoPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Mods", "WaypointBeacon", "modinfo.json");
+                if (File.Exists(modInfoPath))
+                {
+                    string json = File.ReadAllText(modInfoPath);
+                    const string key = "\"version\"";
+                    int idx = json.IndexOf(key, StringComparison.OrdinalIgnoreCase);
+                    if (idx >= 0)
+                    {
+                        int colon = json.IndexOf(':', idx);
+                        int q1 = json.IndexOf('"', colon + 1);
+                        int q2 = json.IndexOf('"', q1 + 1);
+                        if (q1 >= 0 && q2 > q1)
+                        {
+                            return json.Substring(q1 + 1, q2 - q1 - 1);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+
+            return "unknown";
+        }
+
         private void OnClose() => TryClose();
 
         private void Compose()
@@ -96,8 +149,11 @@ namespace WaypointBeacon
 
             CairoFont labelFont = CairoFont.WhiteSmallishText();
 
-            SingleComposer.AddStaticText("                  The Waypoint Beacon Mod. Version 1.0\nYour map knows. Your eyes can too - 3D beacons for waypoints",
-                labelFont, ElementBounds.Fixed(14, y, width - pad, rowH * 2), "Welcome-lbl");
+            string modVersion = GetModDisplayVersion();
+            string welcomeText = $"The Waypoint Beacon Mod. Version {modVersion}\nYour map knows. Your eyes can too - 3D beacons for waypoints";
+            SingleComposer.AddStaticText(welcomeText,
+                labelFont, EnumTextOrientation.Center, ElementBounds.Fixed(10, y, width - 20, rowH * 2), "Welcome-lbl");
+
            
             y += rowH * 2 + rowGap;
 
@@ -113,8 +169,8 @@ namespace WaypointBeacon
                 "Beacon-Vision.\nCrank it up for superhero sight\nOr turn it down and save your eyeballs.\n\nRange: 250-20000 blocks.\nDefault=10000 blocks.");
             AddSwitchRow("Near Beacon Fade-out", "bm-fadenear", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnNearFadeChanged, 300,
                 "Beacons get shy the closer you get.\nFade distance can be changed in config.\n\nDefault=On.");
-            AddSwitchRow("New Waypoint = Beacon", "bm-newwp", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnNewWaypointBeaconChanged, 300,
-                "Turn waypoints into glorious sky lasers.\nOff=They stay shy and normal.\n(Auto Map Markers friendly)\n\nDefault=On.");
+            AddSwitchRow("New Waypoint = Beacon", "bm-newwaypointbeacon", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnDefaultNewWaypointBeaconChanged, 240,
+                "Controls default beacon state for new waypoints.\nYou can still override this per-waypoint in the Add dialog.\n\nDefault=On.");
             AddSwitchRow("Hide All Beacons", "bm-hideall", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnHideAllBeaconsChanged, 200,
                 "Panic button! Nuke it all!\nThis just temporarily stops the mod from rendering stuff.\n\nDefault=Off");
             AddSwitchRow($"Show Beams ({showBeamsKey})", "bm-showbeams", labelFont, ctrlX, pad, labelW, ref y, ctrlW, rowH, rowGap, OnShowBeamsChanged, 220,
@@ -152,10 +208,6 @@ namespace WaypointBeacon
             bool hideAll = !(mod?.GlobalBeaconsEnabled ?? true);
             try { SingleComposer.GetSwitch("bm-hideall").SetValue(hideAll); } catch { }
 
-            // New Waypoint Beacon switch
-            bool newWpBeacon = mod?.DefaultNewWaypointBeaconOn ?? false;
-            try { SingleComposer.GetSwitch("bm-newwp").SetValue(newWpBeacon); } catch { }
-
             // Show Beams switch
             bool showBeams = mod?.BeamsEnabled ?? true;
             try { SingleComposer.GetSwitch("bm-showbeams").SetValue(showBeams); } catch { }
@@ -164,6 +216,10 @@ namespace WaypointBeacon
             // Near Beacon Fade-out switch
             bool nearFade = mod?.NearBeaconFadeOutEnabled ?? false;
             try { SingleComposer.GetSwitch("bm-fadenear").SetValue(nearFade); } catch { }
+
+            // New waypoint beacon default switch
+            bool newWpBeacon = mod?.DefaultNewWaypointBeaconOn ?? true;
+            try { SingleComposer.GetSwitch("bm-newwaypointbeacon").SetValue(newWpBeacon); } catch { }
 
             // (Icons are always shown)
         }
@@ -186,7 +242,7 @@ namespace WaypointBeacon
             mod?.SetNearBeaconFadeOutEnabled(on);
         }
 
-        private void OnNewWaypointBeaconChanged(bool on)
+        private void OnDefaultNewWaypointBeaconChanged(bool on)
         {
             mod?.SetDefaultNewWaypointBeaconOn(on);
         }

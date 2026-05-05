@@ -140,23 +140,34 @@ namespace WaypointBeacon
         private IServerNetworkChannel serverChannel;
 
 
-        // Beacon toggle persistence (server stores per-player; client keeps local overrides)
+        // Beacon toggle persistence (client-local per world+player)
         private readonly Dictionary<string, bool> beaconOverrides = new Dictionary<string, bool>();
+        private readonly HashSet<string> localBeaconOnKeys = new HashSet<string>();
 
         private bool requestedPins;
 
         // Track waypoints we've seen this session so we can apply the default beacon setting only to newly created waypoints
         private readonly HashSet<string> seenWaypointKeys = new HashSet<string>();
+        private bool pendingAddDialogChoiceValid;
+        private bool pendingAddDialogChoice;
         private bool worldBaselinePrepared;
         private bool serverBaselineInitialized;
         private bool pinsSyncReceived;
         private long clientStartMs;
+        private bool localBeaconStateLoaded;
+        private string localBeaconStateFileName;
 
         private const string PinsAttrKeyPrefix = "waypointbeacon:pins:";
         private const string BaselineAttrKeyPrefix = "waypointbeacon:baseline:";
 
         // ---- Client config (local only) ----
         private const string ClientConfigFileName = "waypointbeacon.json";
+        private const string LocalBeaconStateFilePrefix = "waypointbeacon-beaconstate";
+
+        public class WaypointBeaconLocalState
+        {
+            public List<string> OnKeys = new List<string>();
+        }
 
         public class WaypointBeaconClientConfig
         {
@@ -332,9 +343,6 @@ private float TryGetCairoFontPx(CairoFont font)
 
             // No need to rebuild visible beacons; beam renderer reads this flag each frame.
         }
-
-
-
         public void ToggleGlobalBeaconsEnabled()
         {
             SetGlobalBeaconsEnabled(!GlobalBeaconsEnabled);
@@ -393,23 +401,29 @@ private float TryGetCairoFontPx(CairoFont font)
         }
 
         // Remembered default for new waypoints (Add Waypoint dialog)
-        public bool DefaultNewWaypointBeaconOn => clientConfig?.DefaultNewWaypointBeaconOn ?? false;
+        public bool DefaultNewWaypointBeaconOn => clientConfig?.DefaultNewWaypointBeaconOn ?? true;
 
 
 
         /// <summary>What the Add Waypoint dialog checkbox should default to.</summary>
-        public bool AddDialogBeaconChoice => clientConfig?.DefaultNewWaypointBeaconOn ?? false;
+        public bool AddDialogBeaconChoice => DefaultNewWaypointBeaconOn;
+
+        internal void SetPendingAddDialogChoice(bool on)
+        {
+            pendingAddDialogChoice = on;
+            pendingAddDialogChoiceValid = true;
+        }
+
+        internal void ClearPendingAddDialogChoice()
+        {
+            pendingAddDialogChoiceValid = false;
+        }
 
         public void SetDefaultNewWaypointBeaconOn(bool on)
         {
             if (clientConfig == null) clientConfig = new WaypointBeaconClientConfig();
             clientConfig.DefaultNewWaypointBeaconOn = on;
-
-            try
-            {
-                capi?.StoreModConfig(clientConfig, ClientConfigFileName);
-            }
-            catch { }
+            try { capi?.StoreModConfig(clientConfig, ClientConfigFileName); } catch { }
         }
 
         // --------------------------------------------------------------------
@@ -434,24 +448,11 @@ private float TryGetCairoFontPx(CairoFont font)
             if (!TryGetWaypointPos(wpObj, out double x, out double y, out double z)) return;
 
             string name = TryGetString(wpObj, "Title", "title", "Name", "name", "Text", "text") ?? "";
-            int id = GetStableWaypointId(wpObj, x, y, z, name);
             string key = MakePinKey(x, y, z, name);
 
+            EnsureLocalBeaconStateLoaded();
             beaconOverrides[key] = on;
-
-            // Persist + sync
-            if (clientChannel?.Connected == true)
-            {
-                clientChannel.SendPacket(new WbSetPinnedPacket
-                {
-                    WaypointId = id,
-                    Pinned = on,
-                    X = x,
-                    Y = y,
-                    Z = z,
-                    Title = name
-                });
-            }
+            SetLocalBeaconKeyOn(key, on);
 
             RefreshBeacons();
         }
@@ -663,7 +664,7 @@ private float TryGetCairoFontPx(CairoFont font)
 
 
                 BlockPos rawTarget = capi.World.Player.CurrentBlockSelection?.Position
-                    ?? capi.World.Player.Entity.Pos.AsBlockPos;
+                    ?? GetPlayerBlockPos(capi?.World?.Player);
 
                 BlockPos target = NormalizeTargetBlockPos(rawTarget);
                 string title = $"Map Point {nextMapPointNumber++}";
@@ -755,8 +756,8 @@ private float TryGetCairoFontPx(CairoFont font)
             int z = NormalizeWrappedCoord(target.Z, mapSizeZ);
 
             // Prefer the wrapped coordinate nearest to the player's actual position.
-            double? playerX = capi?.World?.Player?.Entity?.Pos?.X;
-            double? playerZ = capi?.World?.Player?.Entity?.Pos?.Z;
+            double? playerX = TryGetPlayerCoordinate(capi?.World?.Player, true);
+            double? playerZ = TryGetPlayerCoordinate(capi?.World?.Player, false);
             x = ResolveClosestWrappedCoord(x, playerX, mapSizeX);
             z = ResolveClosestWrappedCoord(z, playerZ, mapSizeZ);
 
@@ -838,7 +839,6 @@ private float TryGetCairoFontPx(CairoFont font)
 
             if (!TryOpenEditDialogForWaypoint(waypointLayer, createdWaypoint)) return false;
 
-            capi?.Logger?.Notification("[WaypointBeacon] Created waypoint and opened Edit dialog at {0},{1},{2}", target.X, target.Y, target.Z);
             return true;
         }
 
@@ -861,7 +861,7 @@ private float TryGetCairoFontPx(CairoFont font)
                     object waypointLayer = GetWaypointMapLayerObject(mapManager);
                     if (waypointLayer != null)
                     {
-                        // Respect the New Waypoint = Beacon default for chat-created waypoints.
+                        // Manager default is disabled; chat-created waypoints start with beacon OFF unless user enables later.
                         SetBeaconOnForWaypointObject(createdWaypoint, DefaultNewWaypointBeaconOn);
                         PrepareWaypointForImmediateRename(createdWaypoint);
                         if (TryOpenEditDialogForWaypoint(waypointLayer, createdWaypoint))
@@ -946,7 +946,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     TrySetMemberValue(wp, "PlayerUid", playerUid);
                 }
 
-                capi?.Logger?.Notification("[WaypointBeacon] Seeded new waypoint with id={0} at {1},{2},{3}", waypointId, target.X, target.Y, target.Z);
                 return wp;
             }
             catch (Exception e)
@@ -1029,7 +1028,6 @@ private float TryGetCairoFontPx(CairoFont font)
                         if (ret is bool b && !b) continue;
 
                         methodUsed = method.Name;
-                        capi?.Logger?.Notification("[WaypointBeacon] Added waypoint using {0}.{1}", waypointLayer.GetType().Name, method.Name);
                         return true;
                     }
                     catch (Exception invokeEx)
@@ -1117,7 +1115,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     {
                         object ret = method.Invoke(waypointLayer, args);
                         if (ret is bool b && !b) continue;
-                        capi?.Logger?.Notification("[WaypointBeacon] Opened edit dialog using {0}.{1} (id={2}, index={3})", waypointLayer.GetType().Name, method.Name, waypointId, waypointIndex);
                         return true;
                     }
                     catch (Exception invokeEx)
@@ -1147,7 +1144,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     var dlg = ctor.Invoke(args) as GuiDialogEditWayPoint;
                     if (dlg?.TryOpen() == true)
                     {
-                        capi?.Logger?.Notification("[WaypointBeacon] Opened edit dialog via ctor {0} (id={1}, index={2})", ctor, waypointId, waypointIndex);
                         return true;
                     }
                 }
@@ -1380,11 +1376,6 @@ private float TryGetCairoFontPx(CairoFont font)
                 y = rawY;
                 z = NormalizeWrappedCoord(rawZ, mapSizeZ);
 
-                if (rawX != x || rawZ != z)
-                {
-                    capi?.Logger?.Notification("[WaypointBeacon] Add Waypoint (Direct): normalized look-pos raw={0},{1},{2} -> norm={3},{4},{5} (map={6}x{7})", rawX, rawY, rawZ, x, y, z, mapSizeX, mapSizeZ);
-                }
-
                 return true;
             }
             catch
@@ -1432,7 +1423,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     if (px || py || pz) applied = true;
                 }
 
-                capi?.Logger?.Notification("[WaypointBeacon] Add Waypoint (Direct): look-pos {0},{1},{2} applied={3}", x, y, z, applied);
             }
             catch (Exception e)
             {
@@ -1551,7 +1541,6 @@ private float TryGetCairoFontPx(CairoFont font)
                 {
                     if (!TryInvokeAddWaypointMethod(sys, m)) continue;
 
-                    capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via fixed v1.21.6 hotkey method: {0}.{1}", t.FullName, m.Name);
                     return true;
                 }
             }
@@ -1650,7 +1639,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     {
                         if (TryInvokeTriggerMethod(input, m, code))
                         {
-                            capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via trigger-by-code '{0}' using {1}", code, m.Name);
                             return true;
                         }
                     }
@@ -1727,7 +1715,6 @@ private float TryGetCairoFontPx(CairoFont font)
 
                     if (TryInvokeAddWaypointMethod(hk, m))
                     {
-                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey method {0}.{1}", hk.GetType().Name, m.Name);
                         return true;
                     }
 
@@ -1739,7 +1726,6 @@ private float TryGetCairoFontPx(CairoFont font)
                         {
                             object ret = m.Invoke(hk, new object[] { comb });
                             if (ret is bool b && !b) continue;
-                            capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey direct invoke {0}.{1}", hk.GetType().Name, m.Name);
                             return true;
                         }
                         catch { }
@@ -1755,7 +1741,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     var del = f.GetValue(hk) as Delegate;
                     if (TryInvokeDelegateForHotkey(del, comb))
                     {
-                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey delegate field {0}", f.Name);
                         return true;
                     }
                 }
@@ -1768,7 +1753,6 @@ private float TryGetCairoFontPx(CairoFont font)
                     var del = pr.GetValue(hk) as Delegate;
                     if (TryInvokeDelegateForHotkey(del, comb))
                     {
-                        capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint via vanilla hotkey delegate property {0}", pr.Name);
                         return true;
                     }
                 }
@@ -1893,7 +1877,6 @@ private float TryGetCairoFontPx(CairoFont font)
                 if (!IsSafeAddWaypointMethod(method)) continue;
                 if (TryInvokeAddWaypointMethod(target, method))
                 {
-                    capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via {0}.{1}", target.GetType().Name, method.Name);
                     return true;
                 }
             }
@@ -2002,7 +1985,6 @@ private float TryGetCairoFontPx(CairoFont font)
             {
                 if (!TryInvokeAddWaypointMethod(target, m)) continue;
 
-                capi?.Logger?.Notification("[WaypointBeacon] Opened Add Waypoint dialog via {0}.{1}", t.Name, m.Name);
                 return true;
             }
 
@@ -2142,7 +2124,10 @@ private float TryGetCairoFontPx(CairoFont font)
                     beaconOverrides[bKey] = seedOn;
                 }
 
-                bool beaconOn = beaconOverrides[bKey];
+                EnsureLocalBeaconStateLoaded();
+                bool beaconOn = beaconOverrides.TryGetValue(bKey, out bool overrideOn)
+                    ? overrideOn
+                    : localBeaconOnKeys.Contains(bKey);
                 list.Add(new WaypointRow
                 {
                     Id = id,
@@ -2183,33 +2168,16 @@ private float TryGetCairoFontPx(CairoFont font)
                     // IMPORTANT: wp might be a struct (value type). This is a boxed copy.
                     // We must modify the boxed copy THEN write it back into the list slot.
                     // IMPORTANT: we do NOT change the vanilla waypoint here.
-                    // We only change our beacon override and persist it to the server.
+                    // We only change our beacon override and persist it client-locally.
                     object boxed = wp; // boxed copy (safe if wp is a struct)
 
                     TryGetWaypointPos(boxed, out double px, out double py, out double pz);
                     string title = TryGetString(boxed, "Title", "title", "Name", "name", "Text", "text") ?? "";
 
                     string oKey = MakePinKey(px, py, pz, title);
+                    EnsureLocalBeaconStateLoaded();
                     beaconOverrides[oKey] = pinned;
-
-                    var pkt = new WbSetPinnedPacket
-                    {
-                        WaypointId = waypointId,
-                        Pinned = pinned,
-                        X = px,
-                        Y = py,
-                        Z = pz,
-                        Title = title
-                    };
-
-                    if (clientChannel?.Connected == true)
-                    {
-                        clientChannel.SendPacket(pkt);
-                    }
-                    else
-                    {
-                        capi.Logger.Warning("[WaypointBeacon] Beacon override updated, but network channel not connected yet. (No persistence)");
-                    }
+                    SetLocalBeaconKeyOn(oKey, pinned);
 
                     RefreshBeaconsNow();
 
@@ -2230,7 +2198,7 @@ private float TryGetCairoFontPx(CairoFont font)
         /// <summary>
         /// Sets the beacon ON/OFF override for every currently known waypoint, and refreshes rendering.
         /// This mirrors what you'd do manually (open Edit on each waypoint and toggle the beacon checkbox),
-        /// and also syncs the changes to the server in multiplayer.
+        /// and persists changes to the local client beacon-state file.
         /// </summary>
         public void SetAllWaypointBeacons(bool beaconOn)
         {
@@ -2247,24 +2215,11 @@ private float TryGetCairoFontPx(CairoFont font)
                     string title = TryGetString(wp, "Title", "title", "Name", "name", "Text", "text") ?? "";
                     if (!TryGetWaypointPos(wp, out double x, out double y, out double z)) continue;
 
-                    int stableId = GetStableWaypointId(wp, x, y, z, title);
                     string pinKey = MakePinKey(x, y, z, title);
 
+                    EnsureLocalBeaconStateLoaded();
                     beaconOverrides[pinKey] = beaconOn;
-
-                    // Sync to server (if connected) so other players / server persistence stays correct.
-                    if (clientChannel?.Connected == true)
-                    {
-                        clientChannel.SendPacket(new WbSetPinnedPacket
-                        {
-                            WaypointId = stableId,
-                            Pinned = beaconOn,
-                            X = x,
-                            Y = y,
-                            Z = z,
-                            Title = title
-                        });
-                    }
+                    SetLocalBeaconKeyOn(pinKey, beaconOn);
 
                     changed++;
                 }
@@ -2472,18 +2427,16 @@ private float TryGetCairoFontPx(CairoFont font)
                 var ent = player?.Entity;
                 if (ent == null) return;
 
-                double px = ent.Pos.X;
-                double pz = ent.Pos.Z;
+                if (!TryGetEntityPos(ent, out double px, out _, out double pz)) return;
+
+                var liveKeys = new HashSet<string>();
+                bool sawAnyWaypoint = false;
 
                 foreach (var wp in EnumerateWaypoints())
                 {
+                    if (wp == null) continue;
+                    sawAnyWaypoint = true;
                     if (!TryGetWaypointPos(wp, out double x, out double y, out double z)) continue;
-
-                    // XZ distance only
-                    double dx = x - px;
-                    double dz = z - pz;
-                    double dist = Math.Sqrt(dx * dx + dz * dz);
-                    if (dist > MaxRenderDistanceXZ) continue;
 
                     string name = TryGetString(wp, "Title", "title", "Name", "name", "Text", "text") ?? "Waypoint";
                     string icon = TryGetString(wp, "Icon", "icon") ?? "";
@@ -2496,31 +2449,45 @@ private float TryGetCairoFontPx(CairoFont font)
                     string bKey = MakePinKey(x, y, z, name);
                     if (string.IsNullOrEmpty(bKey)) continue;
 
+                    // Track every waypoint key, not only render-range waypoints.
+                    // Otherwise changing render distance would look like deletions and prune persisted ON states.
+                    liveKeys.Add(bKey);
+
                     bool isNewThisSession = seenWaypointKeys.Add(bKey);
-                    if (isNewThisSession && DefaultNewWaypointBeaconOn && !beaconOverrides.ContainsKey(bKey))
+                    if (isNewThisSession && !beaconOverrides.ContainsKey(bKey))
                     {
-                        SetBeaconOnForWaypointObject(wp, true);
-                        // ensure local cache reflects it immediately
-                        beaconOverrides[bKey] = true;
+                        bool seedOn;
+                        if (pendingAddDialogChoiceValid)
+                        {
+                            seedOn = pendingAddDialogChoice;
+                            pendingAddDialogChoiceValid = false;
+                        }
+                        else
+                        {
+                            seedOn = DefaultNewWaypointBeaconOn;
+                        }
+
+                        SetBeaconOnForWaypointObject(wp, seedOn);
+                        beaconOverrides[bKey] = seedOn;
                     }
 
-                    if (!beaconOverrides.ContainsKey(bKey))
-                    {
-                        beaconOverrides[bKey] = false;
-                    }
-
-                    bool beaconOn = beaconOverrides[bKey];
+                    EnsureLocalBeaconStateLoaded();
+                    bool beaconOn = beaconOverrides.TryGetValue(bKey, out bool overrideOn)
+                        ? overrideOn
+                        : localBeaconOnKeys.Contains(bKey);
                     if (!beaconOn) continue;
+
+                    // XZ distance only controls rendering, never ON/OFF persistence.
+                    double dx = x - px;
+                    double dz = z - pz;
+                    double dist = Math.Sqrt(dx * dx + dz * dz);
+                    if (dist > MaxRenderDistanceXZ) continue;
                     int colorInt = TryGetInt(wp, "Color", "color", "ARGB", "argb", "Rgb", "rgb", "RGBA", "rgba")
                                                        ?? unchecked((int)0xFFFFFFFF);
 
                     int id = GetStableWaypointId(wp, x, y, z, name);
 
                     Vec4f rgba = ColorIntToRgba(colorInt);
-                    if (IsNearBlack(rgba))
-                    {
-                        rgba = new Vec4f(0.25f, 1f, 1f, 1f);
-                    }
 
                     visibleBeacons.Add(new BeaconInfo
                     {
@@ -2533,6 +2500,11 @@ private float TryGetCairoFontPx(CairoFont font)
                         ColorInt = colorInt,
                         ColorRgba = rgba
                     });
+                }
+
+                if (sawAnyWaypoint)
+                {
+                    PruneDeletedWaypointState(liveKeys);
                 }
             }
             catch (Exception e)
@@ -2582,9 +2554,11 @@ private float TryGetCairoFontPx(CairoFont font)
                 var plr = capi?.World?.Player?.Entity;
                 if (plr != null)
                 {
-                    double dx = b.X - plr.Pos.X;
-                    double dy = b.Y - plr.Pos.Y;
-                    double dz = b.Z - plr.Pos.Z;
+                    if (!TryGetEntityPos(plr, out double plrX, out double plrY, out double plrZ)) return name;
+
+                    double dx = b.X - plrX;
+                    double dy = b.Y - plrY;
+                    double dz = b.Z - plrZ;
                     double dist = Math.Sqrt(dx * dx + dy * dy + dz * dz);
 
                     // Quantize to reduce texture churn
@@ -2854,6 +2828,29 @@ private float TryGetCairoFontPx(CairoFont font)
             return $"{xi},{yi},{zi}";
         }
 
+        private void PruneDeletedWaypointState(HashSet<string> liveKeys)
+        {
+            if (liveKeys == null) return;
+
+            if (beaconOverrides.Count > 0)
+            {
+                var staleOverrideKeys = beaconOverrides.Keys.Where(k => !liveKeys.Contains(k)).ToList();
+                foreach (string stale in staleOverrideKeys)
+                {
+                    beaconOverrides.Remove(stale);
+                }
+            }
+
+            EnsureLocalBeaconStateLoaded();
+            bool removedAnyLocal = localBeaconOnKeys.RemoveWhere(k => !liveKeys.Contains(k)) > 0;
+            if (removedAnyLocal) SaveLocalBeaconState();
+
+            if (seenWaypointKeys.Count > 0)
+            {
+                seenWaypointKeys.RemoveWhere(k => !liveKeys.Contains(k));
+            }
+        }
+
         private Dictionary<string, bool> LoadPinsFromPlayer(IServerPlayer player, string attrKey)
         {
             var dict = new Dictionary<string, bool>();
@@ -2947,19 +2944,9 @@ private float TryGetCairoFontPx(CairoFont font)
         {
             try
             {
-                beaconOverrides.Clear();
-                serverBaselineInitialized = pkt?.BaselineInitialized == true;
+                // Client-local storage mode: no server pin state import.
+                serverBaselineInitialized = true;
                 pinsSyncReceived = true;
-
-                int n = Math.Min(pkt?.Keys?.Count ?? 0, pkt?.Pinned?.Count ?? 0);
-                for (int i = 0; i < n; i++)
-                {
-                    string k = pkt.Keys[i];
-                    if (string.IsNullOrEmpty(k)) continue;
-                    beaconOverrides[k] = pkt.Pinned[i];
-                }
-
-                RefreshBeaconsNow();
             }
             catch (Exception e)
             {
@@ -2970,6 +2957,60 @@ private float TryGetCairoFontPx(CairoFont font)
         private void ApplyPinOverridesToLiveWaypoints()
         {
             // No longer used: we do not override vanilla waypoint data.
+        }
+
+        private void EnsureLocalBeaconStateLoaded()
+        {
+            if (localBeaconStateLoaded || capi == null) return;
+
+            string uid = capi?.World?.Player?.PlayerUID ?? "unknown";
+            string seed = capi?.World?.Seed.ToString() ?? "unknown";
+            localBeaconStateFileName = $"{LocalBeaconStateFilePrefix}.{seed}.{SanitizeForFileName(uid)}.json";
+
+            try
+            {
+                var state = capi.LoadModConfig<WaypointBeaconLocalState>(localBeaconStateFileName) ?? new WaypointBeaconLocalState();
+                localBeaconOnKeys.Clear();
+                foreach (string k in state.OnKeys ?? new List<string>())
+                {
+                    if (!string.IsNullOrWhiteSpace(k)) localBeaconOnKeys.Add(k);
+                }
+            }
+            catch
+            {
+                localBeaconOnKeys.Clear();
+            }
+
+            localBeaconStateLoaded = true;
+        }
+
+        private void SaveLocalBeaconState()
+        {
+            if (!localBeaconStateLoaded || capi == null || string.IsNullOrWhiteSpace(localBeaconStateFileName)) return;
+            try
+            {
+                capi.StoreModConfig(new WaypointBeaconLocalState { OnKeys = localBeaconOnKeys.OrderBy(k => k).ToList() }, localBeaconStateFileName);
+            }
+            catch { }
+        }
+
+        private void SetLocalBeaconKeyOn(string key, bool on)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return;
+            EnsureLocalBeaconStateLoaded();
+            bool changed = on ? localBeaconOnKeys.Add(key) : localBeaconOnKeys.Remove(key);
+            if (changed) SaveLocalBeaconState();
+        }
+
+        private static string SanitizeForFileName(string v)
+        {
+            if (string.IsNullOrWhiteSpace(v)) return "unknown";
+            var sb = new StringBuilder(v.Length);
+            foreach (char ch in v)
+            {
+                sb.Append(char.IsLetterOrDigit(ch) || ch == '_' || ch == '-' ? ch : '_');
+            }
+            return sb.ToString();
         }
 
 
@@ -3172,6 +3213,90 @@ private float TryGetCairoFontPx(CairoFont font)
             }
         }
 
+        private static BlockPos GetPlayerBlockPos(IClientPlayer player)
+        {
+            if (player == null) return new BlockPos(0, 0, 0);
+            if (TryGetEntityPos(player.Entity, out double x, out double y, out double z))
+            {
+                return new BlockPos((int)Math.Floor(x), (int)Math.Floor(y), (int)Math.Floor(z));
+            }
+
+            return new BlockPos(0, 0, 0);
+        }
+
+        private static double? TryGetPlayerCoordinate(IClientPlayer player, bool xAxis)
+        {
+            if (player == null) return null;
+            if (!TryGetEntityPos(player.Entity, out double x, out _, out double z)) return null;
+            return xAxis ? x : z;
+        }
+
+        private static double GetPlayerPitchRadians(IClientPlayer player)
+        {
+            if (player?.Entity == null) return 0;
+
+            object posObj =
+                TryGetMember(player.Entity, "Pos") ??
+                TryGetMember(player.Entity, "pos") ??
+                TryGetMember(player.Entity, "Position") ??
+                TryGetMember(player.Entity, "position") ??
+                TryGetMember(player.Entity, "SidedPos") ??
+                TryGetMember(player.Entity, "sidedPos") ??
+                TryGetMember(player.Entity, "ServerPos") ??
+                TryGetMember(player.Entity, "serverPos");
+
+            if (posObj == null) return 0;
+
+            double? pitch = TryGetDouble(posObj, "Pitch", "pitch");
+            return pitch ?? 0;
+        }
+
+        private static bool TryGetEntityPos(object entity, out double x, out double y, out double z)
+        {
+            x = y = z = 0;
+            if (entity == null) return false;
+
+            object posObj =
+                TryGetMember(entity, "Pos") ??
+                TryGetMember(entity, "pos") ??
+                TryGetMember(entity, "Position") ??
+                TryGetMember(entity, "position") ??
+                TryGetMember(entity, "SidedPos") ??
+                TryGetMember(entity, "sidedPos") ??
+                TryGetMember(entity, "ServerPos") ??
+                TryGetMember(entity, "serverPos");
+
+            if (posObj is Vec3d v3d)
+            {
+                x = v3d.X;
+                y = v3d.Y;
+                z = v3d.Z;
+                return true;
+            }
+
+            if (posObj is Vec3f v3f)
+            {
+                x = v3f.X;
+                y = v3f.Y;
+                z = v3f.Z;
+                return true;
+            }
+
+            double? xx = TryGetDouble(posObj, "X", "x");
+            double? yy = TryGetDouble(posObj, "Y", "y");
+            double? zz = TryGetDouble(posObj, "Z", "z");
+
+            if (xx.HasValue && yy.HasValue && zz.HasValue)
+            {
+                x = xx.Value;
+                y = yy.Value;
+                z = zz.Value;
+                return true;
+            }
+
+            return false;
+        }
+
         private static object TryGetMember(object obj, string name)
         {
             var t = obj.GetType();
@@ -3301,11 +3426,6 @@ private float TryGetCairoFontPx(CairoFont font)
 
             // AABBGGRR
             return (a << 24) | (b << 16) | (g << 8) | r;
-        }
-
-        private static bool IsNearBlack(Vec4f rgba)
-        {
-            return rgba.X < 0.05f && rgba.Y < 0.05f && rgba.Z < 0.05f;
         }
 
         public class BeaconInfo
@@ -3493,18 +3613,21 @@ private float TryGetCairoFontPx(CairoFont font)
                     {
                         if (lastDistancePos == null)
                         {
-                            lastDistancePos = new Vec3d(ent.Pos.X, ent.Pos.Y, ent.Pos.Z);
+                            if (!TryGetEntityPos(ent, out double entX, out double entY, out double entZ)) return;
+                            lastDistancePos = new Vec3d(entX, entY, entZ);
                         }
                         else
                         {
-                            double dx = ent.Pos.X - lastDistancePos.X;
-                            double dy = ent.Pos.Y - lastDistancePos.Y;
-                            double dz = ent.Pos.Z - lastDistancePos.Z;
+                            if (!TryGetEntityPos(ent, out double entX, out double entY, out double entZ)) return;
+
+                            double dx = entX - lastDistancePos.X;
+                            double dy = entY - lastDistancePos.Y;
+                            double dz = entZ - lastDistancePos.Z;
 
                             if ((dx * dx + dy * dy + dz * dz) > 1.0)
                             {
                                 DisposeAllTextures();
-                                lastDistancePos.Set(ent.Pos.X, ent.Pos.Y, ent.Pos.Z);
+                                lastDistancePos.Set(entX, entY, entZ);
                             }
                         }
                     }
@@ -3565,7 +3688,7 @@ var beacons = mod.GetVisibleBeacons();
                         // VS pitch convention is typically +down, so invert to get +up.
                         const double aimMarginDeg = 0.5;
                         double aimMarginRad = aimMarginDeg * (Math.PI / 180.0);
-                        double pitchRad = capi.World.Player.Entity.Pos.Pitch;
+                        double pitchRad = GetPlayerPitchRadians(capi?.World?.Player);
                         if (Math.Abs(pitchRad) > Math.PI * 1.1)
                         {
                             pitchRad *= (Math.PI / 180.0);
@@ -3820,10 +3943,11 @@ private static double Clamp(double v, double lo, double hi)
         private const string AddDlg = "Vintagestory.GameContent.GuiDialogAddWayPoint";
 
         private const string BeaconSwitchKey = "wbBeaconSwitch";
-
         private static Harmony harmony;
         private static ICoreClientAPI capi;
         private static WaypointBeaconModSystem mod;
+        private static bool addDialogBeaconState;
+        private static bool addDialogBeaconStateValid;
 
         public static void TryPatch(ICoreClientAPI api, WaypointBeaconModSystem modSystem)
         {
@@ -3837,37 +3961,45 @@ private static double Clamp(double v, double lo, double hi)
                 var patcherType = typeof(WaypointDialogBeaconPatch);
 
                 // ---- EDIT dialog ----
-                var editCompose = typeof(GuiDialogEditWayPoint).GetMethod("ComposeDialog", BindingFlags.Instance | BindingFlags.NonPublic);
+                var editCompose = FindDialogMethod(typeof(GuiDialogEditWayPoint), "ComposeDialog");
                 if (editCompose != null)
                 {
                     harmony.Patch(editCompose,
-                        transpiler: new HarmonyMethod(patcherType.GetMethod(nameof(ComposeDialog_Transpiler), BindingFlags.Static | BindingFlags.Public)),
+                        transpiler: new HarmonyMethod(patcherType.GetMethod(nameof(ComposeDialogEdit_Transpiler), BindingFlags.Static | BindingFlags.Public)),
                         postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_GuiDialogEditWayPoint_ComposeDialog), BindingFlags.Static | BindingFlags.Public))
                     );
                 }
 
-                var editOnSave = typeof(GuiDialogEditWayPoint).GetMethod("onSave", BindingFlags.Instance | BindingFlags.NonPublic);
+                var editOnSave = FindDialogMethod(typeof(GuiDialogEditWayPoint), "OnSave", "onSave");
                 if (editOnSave != null)
                 {
                     harmony.Patch(editOnSave, postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_GuiDialogEditWayPoint_onSave), BindingFlags.Static | BindingFlags.Public)));
                 }
+                else
+                {
+                    capi?.Logger?.Warning("[WaypointBeacon] Could not find GuiDialogEditWayPoint.OnSave/onSave; edit beacon save hook not patched.");
+                }
 
 
                 // ---- ADD dialog ----
-                var addCompose = typeof(GuiDialogAddWayPoint).GetMethod("ComposeDialog", BindingFlags.Instance | BindingFlags.NonPublic);
+                var addCompose = FindDialogMethod(typeof(GuiDialogAddWayPoint), "ComposeDialog");
                 if (addCompose != null)
                 {
                     harmony.Patch(addCompose,
-                        transpiler: new HarmonyMethod(patcherType.GetMethod(nameof(ComposeDialog_Transpiler), BindingFlags.Static | BindingFlags.Public)),
+                        transpiler: new HarmonyMethod(patcherType.GetMethod(nameof(ComposeDialogAdd_Transpiler), BindingFlags.Static | BindingFlags.Public)),
                         postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_GuiDialogAddWayPoint_ComposeDialog), BindingFlags.Static | BindingFlags.Public))
                     );
                 }
 
 
-                var addOnSave = typeof(GuiDialogAddWayPoint).GetMethod("onSave", BindingFlags.Instance | BindingFlags.NonPublic);
+                var addOnSave = FindDialogMethod(typeof(GuiDialogAddWayPoint), "OnSave", "onSave");
                 if (addOnSave != null)
                 {
                     harmony.Patch(addOnSave, prefix: new HarmonyMethod(patcherType.GetMethod(nameof(Pre_GuiDialogAddWayPoint_onSave), BindingFlags.Static | BindingFlags.Public)), postfix: new HarmonyMethod(patcherType.GetMethod(nameof(Post_GuiDialogAddWayPoint_onSave), BindingFlags.Static | BindingFlags.Public)));
+                }
+                else
+                {
+                    capi?.Logger?.Warning("[WaypointBeacon] Could not find GuiDialogAddWayPoint.OnSave/onSave; manual add beacon choice will not be captured.");
                 }
 
 
@@ -3875,7 +4007,7 @@ private static double Clamp(double v, double lo, double hi)
                 Type cartographerEditType = FindTypeByFullName("NB.Cartographer.GuiDialogEditSharedWayPoint");
                 if (cartographerEditType != null)
                 {
-                    var cCompose = cartographerEditType.GetMethod("ComposeDialog", BindingFlags.Instance | BindingFlags.NonPublic);
+                    var cCompose = FindDialogMethod(cartographerEditType, "ComposeDialog");
                     if (cCompose != null)
                     {
                         harmony.Patch(cCompose,
@@ -3884,7 +4016,7 @@ private static double Clamp(double v, double lo, double hi)
                         );
                     }
 
-                    var cOnSave = cartographerEditType.GetMethod("onSave", BindingFlags.Instance | BindingFlags.NonPublic);
+                    var cOnSave = FindDialogMethod(cartographerEditType, "OnSave", "onSave");
                     if (cOnSave != null)
                     {
                         harmony.Patch(cOnSave,
@@ -3921,34 +4053,85 @@ private static double Clamp(double v, double lo, double hi)
             return null;
         }
 
+        private static MethodInfo FindDialogMethod(Type type, params string[] candidateNames)
+        {
+            if (type == null || candidateNames == null || candidateNames.Length == 0) return null;
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            foreach (string name in candidateNames)
+            {
+                if (string.IsNullOrEmpty(name)) continue;
+
+                try
+                {
+                    MethodInfo exact = type.GetMethod(name, flags);
+                    if (exact != null) return exact;
+
+                    MethodInfo ignoreCase = type.GetMethod(name, flags | BindingFlags.IgnoreCase);
+                    if (ignoreCase != null) return ignoreCase;
+                }
+                catch
+                {
+                }
+            }
+
+            return null;
+        }
+
         private static void OnBeaconToggled(bool on)
         {
-            // no-op; we persist on save (and remember default on Add save)
+            addDialogBeaconState = on;
+            addDialogBeaconStateValid = true;
         }
 
-        public static GuiComposer AddBeaconComponent(GuiComposer composer, ref ElementBounds leftColumn, ref ElementBounds rightColumn)
+        public static GuiComposer AddBeaconComponentEdit(GuiComposer composer, ref ElementBounds leftColumn, ref ElementBounds rightColumn)
         {
-            // Called during dialog ComposeDialog (before composer.Compose runs).
-            // Match Cartographer's layout pattern: label left, switch right.
             return composer
                 .AddStaticText(Vintagestory.API.Config.Lang.Get("Beacon"), CairoFont.WhiteSmallText(), leftColumn = leftColumn.BelowCopy(0, 9))
-                .AddSwitch(OnBeaconToggled, rightColumn = rightColumn.BelowCopy(0, 5).WithFixedWidth(200), BeaconSwitchKey);
+                .AddSwitch(OnBeaconToggled, rightColumn = rightColumn.BelowCopy(0, 5).WithFixedWidth(28).WithFixedHeight(28), BeaconSwitchKey);
         }
 
+        public static GuiComposer AddBeaconComponentAdd(GuiComposer composer, ref ElementBounds leftColumn, ref ElementBounds rightColumn)
+        {
+            // Keep Add-dialog Beacon controls at a stable absolute location so extra injected rows
+            // (e.g. from other mods) cannot push the controls into the color palette.
+            // Vintage Story scales Fixed bounds with UI scale, so this remains scale-aware.
+            ElementBounds beaconSwitchBounds = ElementBounds.Fixed(260, 90, 28, 28);
+            ElementBounds beaconLabelBounds = ElementBounds.Fixed(190, 93, 90, 24);
+
+            return composer
+                .AddStaticText(Vintagestory.API.Config.Lang.Get("Beacon"), CairoFont.WhiteSmallText(), beaconLabelBounds)
+                .AddSwitch(OnBeaconToggled, rightColumn = beaconSwitchBounds, BeaconSwitchKey);
+        }
+
+        public static IEnumerable<CodeInstruction> ComposeDialogEdit_Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            return ComposeDialog_InjectBeaconTranspiler(instructions, nameof(AddBeaconComponentEdit), "Edit");
+        }
+
+        public static IEnumerable<CodeInstruction> ComposeDialogAdd_Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            return ComposeDialog_InjectBeaconTranspiler(instructions, nameof(AddBeaconComponentAdd), "Add");
+        }
+
+        // Kept for optional external edit dialogs that should use edit-style placement.
         public static IEnumerable<CodeInstruction> ComposeDialog_Transpiler(IEnumerable<CodeInstruction> instructions)
+        {
+            return ComposeDialog_InjectBeaconTranspiler(instructions, nameof(AddBeaconComponentEdit), "External/Edit");
+        }
+
+        private static IEnumerable<CodeInstruction> ComposeDialog_InjectBeaconTranspiler(IEnumerable<CodeInstruction> instructions, string injectorMethodName, string dialogTag)
         {
             bool found = false;
 
             foreach (var instruction in instructions)
             {
-                // Anchor at the existing control key used by vanilla: "waypoint-color"
                 if (instruction.opcode == System.Reflection.Emit.OpCodes.Ldstr && (string)instruction.operand == "waypoint-color")
                 {
-                    // ElementBounds locals (leftColumn/rightColumn) are locals 0 and 1 in the vanilla dialogs
                     yield return new CodeInstruction(System.Reflection.Emit.OpCodes.Ldloca_S, 0);
                     yield return new CodeInstruction(System.Reflection.Emit.OpCodes.Ldloca_S, 1);
                     yield return new CodeInstruction(System.Reflection.Emit.OpCodes.Call,
-                        typeof(WaypointDialogBeaconPatch).GetMethod(nameof(AddBeaconComponent), BindingFlags.Static | BindingFlags.Public));
+                        typeof(WaypointDialogBeaconPatch).GetMethod(injectorMethodName, BindingFlags.Static | BindingFlags.Public));
 
                     found = true;
                 }
@@ -3958,7 +4141,7 @@ private static double Clamp(double v, double lo, double hi)
 
             if (!found && capi != null)
             {
-                capi.Logger.Warning("[WaypointBeacon] Transpiler: could not find anchor Ldstr \"waypoint-color\" in ComposeDialog; beacon switch not injected.");
+                capi.Logger.Warning("[WaypointBeacon] {0} transpiler: could not find anchor Ldstr \"waypoint-color\" in ComposeDialog; beacon switch not injected.", dialogTag);
             }
         }
 
@@ -4066,9 +4249,18 @@ private static double Clamp(double v, double lo, double hi)
             {
                 if (__instance?.SingleComposer == null || mod == null) return;
 
-                // Add dialog default choice from manager default setting
-                bool on = mod.AddDialogBeaconChoice;
+                // Add dialog starts from Beacon Manager default; user choice in this dialog is authoritative.
+                bool on = mod.DefaultNewWaypointBeaconOn;
+                object sw = __instance.SingleComposer.GetSwitch(BeaconSwitchKey);
+                if (sw == null)
+                {
+                    capi?.Logger?.Warning("[WaypointBeacon] Add dialog beacon switch was not composed (key: {0})", BeaconSwitchKey);
+                    return;
+                }
+
                 TrySetSwitchState(__instance.SingleComposer, BeaconSwitchKey, on);
+                addDialogBeaconState = on;
+                addDialogBeaconStateValid = false;
             }
             catch (Exception e)
             {
@@ -4098,12 +4290,24 @@ private static double Clamp(double v, double lo, double hi)
             {
                 if (__instance?.SingleComposer == null || mod == null) return;
 
+                // Priority order:
+                // 1) direct switch state read from composer
+                // 2) last add-dialog toggle callback state (fallback when switch cannot be reflected)
+                // 3) Beacon Manager default
+                //
+                // Manual Add Waypoint must override the default. The default is only for initializing
+                // the dialog switch when it opens.
                 bool? on = TryGetSwitchStateNullable(__instance.SingleComposer, BeaconSwitchKey);
+                if (!on.HasValue && addDialogBeaconStateValid)
+                {
+                    on = addDialogBeaconState;
+                }
                 if (!on.HasValue)
                 {
-                    addBeforeKeys = null;
-                    return;
+                    on = mod.DefaultNewWaypointBeaconOn;
                 }
+
+                mod.SetPendingAddDialogChoice(on.Value);
 
                 // Apply to the newly created waypoint (it may appear in the list a tick later)
                 if (TryApplyBeaconToNewlyCreatedWaypoint(on.Value))
@@ -4166,6 +4370,7 @@ private static double Clamp(double v, double lo, double hi)
 
             mod.SetBeaconOnForWaypointObject(newest, on);
             mod.MarkWaypointSeen(newest);
+            mod.ClearPendingAddDialogChoice();
             return true;
         }
 
@@ -4199,6 +4404,90 @@ private static double Clamp(double v, double lo, double hi)
             }
         }
 
+
+        private static BlockPos GetPlayerBlockPos(IClientPlayer player)
+        {
+            if (player == null) return new BlockPos(0, 0, 0);
+            if (TryGetEntityPos(player.Entity, out double x, out double y, out double z))
+            {
+                return new BlockPos((int)Math.Floor(x), (int)Math.Floor(y), (int)Math.Floor(z));
+            }
+
+            return new BlockPos(0, 0, 0);
+        }
+
+        private static double? TryGetPlayerCoordinate(IClientPlayer player, bool xAxis)
+        {
+            if (player == null) return null;
+            if (!TryGetEntityPos(player.Entity, out double x, out _, out double z)) return null;
+            return xAxis ? x : z;
+        }
+
+        private static double GetPlayerPitchRadians(IClientPlayer player)
+        {
+            if (player?.Entity == null) return 0;
+
+            object posObj =
+                TryGetMember(player.Entity, "Pos") ??
+                TryGetMember(player.Entity, "pos") ??
+                TryGetMember(player.Entity, "Position") ??
+                TryGetMember(player.Entity, "position") ??
+                TryGetMember(player.Entity, "SidedPos") ??
+                TryGetMember(player.Entity, "sidedPos") ??
+                TryGetMember(player.Entity, "ServerPos") ??
+                TryGetMember(player.Entity, "serverPos");
+
+            if (posObj == null) return 0;
+
+            double? pitch = TryGetDoubleFrom(posObj, "Pitch", "pitch");
+            return pitch ?? 0;
+        }
+
+        private static bool TryGetEntityPos(object entity, out double x, out double y, out double z)
+        {
+            x = y = z = 0;
+            if (entity == null) return false;
+
+            object posObj =
+                TryGetMember(entity, "Pos") ??
+                TryGetMember(entity, "pos") ??
+                TryGetMember(entity, "Position") ??
+                TryGetMember(entity, "position") ??
+                TryGetMember(entity, "SidedPos") ??
+                TryGetMember(entity, "sidedPos") ??
+                TryGetMember(entity, "ServerPos") ??
+                TryGetMember(entity, "serverPos");
+
+            if (posObj is Vec3d v3d)
+            {
+                x = v3d.X;
+                y = v3d.Y;
+                z = v3d.Z;
+                return true;
+            }
+
+            if (posObj is Vec3f v3f)
+            {
+                x = v3f.X;
+                y = v3f.Y;
+                z = v3f.Z;
+                return true;
+            }
+
+            double? xx = TryGetDoubleFrom(posObj, "X", "x");
+            double? yy = TryGetDoubleFrom(posObj, "Y", "y");
+            double? zz = TryGetDoubleFrom(posObj, "Z", "z");
+
+            if (xx.HasValue && yy.HasValue && zz.HasValue)
+            {
+                x = xx.Value;
+                y = yy.Value;
+                z = zz.Value;
+                return true;
+            }
+
+            return false;
+        }
 
         private static object TryGetMember(object obj, string name)
         {
@@ -4264,6 +4553,22 @@ private static double Clamp(double v, double lo, double hi)
             return TryGetXYZ(wp, out x, out y, out z);
         }
 
+        private static double? TryGetDoubleFrom(object obj, params string[] names)
+        {
+            if (obj == null || names == null) return null;
+
+            foreach (string n in names)
+            {
+                object m = TryGetMember(obj, n);
+                if (m is double d) return d;
+                if (m is float f) return f;
+                if (m is int i) return i;
+                if (m is long l) return l;
+            }
+
+            return null;
+        }
+
         private static string TryGetStringFrom(object obj, params string[] names)
         {
             foreach (var n in names)
@@ -4319,7 +4624,13 @@ private static double Clamp(double v, double lo, double hi)
                 if (pOn != null && pOn.CanRead) return (bool)pOn.GetValue(sw);
 
                 var fOn = sw.GetType().GetField("On", flags) ?? sw.GetType().GetField("on", flags);
-                if (fOn != null) return (bool)fOn.GetValue(sw);
+                if (fOn != null) return Convert.ToBoolean(fOn.GetValue(sw));
+
+                var pValue = sw.GetType().GetProperty("Value", flags);
+                if (pValue != null && pValue.CanRead) return Convert.ToBoolean(pValue.GetValue(sw));
+
+                var mGet = sw.GetType().GetMethod("GetValue", flags, null, Type.EmptyTypes, null);
+                if (mGet != null) return Convert.ToBoolean(mGet.Invoke(sw, null));
             }
             catch { }
             return null;
